@@ -214,6 +214,9 @@ class BlinkCalibrator:
 class RateBound:
     """Rate bound using CBF safety filter (Kartynnik §5 p. 3 + dense_armor CBF)."""
 
+    budget_s: float = 1e-3
+    memory_class: str = 'O(1)'
+
     def __init__(self, max_step: float) -> None:
         self.max_step = float(max_step)
         self._prev: dict[str, float] = {}
