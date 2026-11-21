@@ -176,7 +176,7 @@ class FaceShield(Transformer):
 
             if c <= 0.0 or not (np.isfinite(cx) and np.isfinite(cy)):
                 self._gap[i] += 1
-                _ = kf.learn_one({})
+                _ = kf.learn_one(None)
                 pred_x, pred_y = float(kf._x[0]), float(kf._x[1])
 
                 if self._gap[i] > self.max_gap and self.neutral is not None:
