@@ -43,9 +43,25 @@ class FaceDetector:
     def __init__(self, landmarker: Any) -> None:
         self._landmarker = landmarker
 
+    def _to_mp_image(self, image: Any) -> Any:
+        """Convert numpy array to MediaPipe Image if needed."""
+        if isinstance(image, np.ndarray):
+            import mediapipe as mp  # type: ignore[import-untyped]  # noqa: PLC0415
+
+            return mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(image))
+        return image
+
     def detect(self, image: Any, t: float) -> dict:
-        """Detect landmarks in ``image`` and return the pipeline frame dict."""
-        result = self._landmarker.detect(image)
+        """Detect landmarks in ``image`` and return the pipeline frame dict.
+
+        Args:
+            image: RGB image as numpy array (H, W, 3) or MediaPipe Image.
+            t: timestamp in seconds.
+        """
+        # Convert numpy array to MediaPipe Image if needed
+        mp_image = self._to_mp_image(image)
+
+        result = self._landmarker.detect(mp_image)
         faces = getattr(result, 'face_landmarks', None) or []
         t = float(t)
         if not faces:
@@ -56,8 +72,8 @@ class FaceDetector:
                 'iris': np.zeros((2, 2), dtype=float),
             }
         landmarks = faces[0]
-        arr = np.asarray(image)
-        h, w = int(arr.shape[0]), int(arr.shape[1])
+        # MediaPipe landmarks are normalized [0,1], scale to image pixels
+        w, h = mp_image.width, mp_image.height
         mesh = np.array([[float(lm.x) * w, float(lm.y) * h] for lm in landmarks], dtype=float)
         points = mesh_to_68(mesh)
         confidence: np.ndarray = np.ones(68, dtype=float)
@@ -70,23 +86,43 @@ class FaceDetector:
         }
 
     @classmethod
-    def open_default(cls) -> FaceDetector:
+    def open_default(cls, model_path: str = 'face_landmarker.task') -> FaceDetector:
         """Build the default MediaPipe ``FaceLandmarker`` based detector.
 
         ``mediapipe`` is imported only here.
+
+        Args:
+            model_path: path to the face_landmarker.task model file.
         """
-        from mediapipe.tasks.python.core import BaseOptions  # type: ignore[import-untyped]  # noqa: PLC0415,I001
-        from mediapipe.tasks.python.vision import (  # type: ignore[import-untyped]  # noqa: PLC0415,I001
-            FaceLandmarker,  # noqa: PLC0415
-            FaceLandmarkerOptions,  # noqa: PLC0415
-        )  # noqa: PLC0415
+        from mediapipe.tasks.python import BaseOptions  # type: ignore[import-untyped]  # noqa: I001,PLC0415
+        from mediapipe.tasks.python.vision import (  # type: ignore[import-untyped]  # noqa: I001,PLC0415
+            FaceLandmarker,
+            FaceLandmarkerOptions,
+        )
+        from mediapipe.tasks.python.vision.core.vision_task_running_mode import (  # type: ignore[import-untyped]  # noqa: PLC0415
+            VisionTaskRunningMode,
+        )
+        import os  # noqa: PLC0415  # intentional lazy import
+
+        if not os.path.exists(model_path):
+            # Try to find it in mediapipe package
+            import mediapipe as mp  # noqa: PLC0415  # intentional lazy import
+
+            mp_root = os.path.dirname(mp.__file__)
+            candidate = os.path.join(mp_root, 'modules', 'face_landmarker', 'face_landmarker.task')
+            if os.path.exists(candidate):
+                model_path = candidate
+
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(
+                'face_landmarker.task model file not found. '
+                'Download from https://storage.googleapis.com/mediapipe-models/'
+                'face_landmarker/face_landmarker/float16/1/face_landmarker.task'
+            )
 
         options = FaceLandmarkerOptions(
-            base_options=BaseOptions(model_asset_path='face_landmarker.task'),
-            running_mode=__import__(
-                'mediapipe.tasks.python.vision.core.vision_task_running_mode',
-                fromlist=['VisionTaskRunningMode'],
-            ).VisionTaskRunningMode.IMAGE,
+            base_options=BaseOptions(model_asset_path=model_path),
+            running_mode=VisionTaskRunningMode.IMAGE,
             output_face_blendshapes=False,
             output_facial_transformation_matrixes=False,
         )

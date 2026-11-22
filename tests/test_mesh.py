@@ -83,13 +83,17 @@ def test_synthetic_mesh_known_geometry():
     mesh = _synthetic_mesh_468()
     pts = mesh_to_68(mesh)
     assert pts.shape == (68, 2)
-    # Corners: outer = min-x corner (temple), inner = max-x corner (nose).
-    # Image-left eye (iBUG left) at x ~30: outer=36 at ~25, inner=39 at ~35.
-    assert np.allclose(pts[36], [25.0, 35.0], atol=_TOL)
-    assert np.allclose(pts[39], [35.0, 35.0], atol=_TOL)
-    # Image-right eye (iBUG right) at x ~70: inner=42 at ~75 (nose), outer=45 at ~65 (temple).
-    assert np.allclose(pts[42], [75.0, 35.0], atol=_TOL)
-    assert np.allclose(pts[45], [65.0, 35.0], atol=_TOL)
+    # Corners: outer = temple side, inner = nose side.
+    # In a non-mirrored camera image: person's LEFT eye (iBUG 36-41) is at
+    # higher x (right side of image), person's RIGHT eye (iBUG 42-47) at lower x.
+    # Synthetic mesh: FACEMESH_LEFT_EYE at x=30 (person's RIGHT eye),
+    # FACEMESH_RIGHT_EYE at x=70 (person's LEFT eye).
+    # Person's LEFT eye (iBUG 36-41) at x~70: outer=36 at max x (75), inner=39 at min x (65).
+    assert np.allclose(pts[36], [75.0, 35.0], atol=_TOL)  # left outer (temple)
+    assert np.allclose(pts[39], [65.0, 35.0], atol=_TOL)  # left inner (nose)
+    # Person's RIGHT eye (iBUG 42-47) at x~30: inner=42 at min x (25), outer=45 at max x (35).
+    assert np.allclose(pts[42], [25.0, 35.0], atol=_TOL)  # right inner (nose)
+    assert np.allclose(pts[45], [35.0, 35.0], atol=_TOL)  # right outer (temple)
     # Lid points: upper lids above the corners, lower lids below.
     assert pts[37, 1] < 35.0 and pts[38, 1] < 35.0
     assert pts[40, 1] > 35.0 and pts[41, 1] > 35.0

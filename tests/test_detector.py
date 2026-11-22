@@ -30,7 +30,12 @@ class _FakeLandmarker:
         self.mesh = mesh
 
     def detect(self, image):
-        h, w = np.asarray(image).shape[:2]
+        # MediaPipe Image has .width and .height properties
+        if hasattr(image, 'width') and hasattr(image, 'height'):
+            w, h = image.width, image.height
+        else:
+            # Fallback for numpy array (backward compat)
+            h, w = np.asarray(image).shape[:2]
         if self.mesh is None:
             return _FakeResult([])
         faces = [[_Lm(float(x) / w, float(y) / h) for (x, y) in self.mesh]]
