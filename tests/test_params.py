@@ -24,8 +24,7 @@ def test_neutral_face_parameters():
     p = landmarks_to_params(synthetic_face_68(), ear_open=0.3)
     assert abs(p['eye_l'] - 0.3 / 0.3) < _TOL
     assert abs(p['eye_r'] - 1.0) < _TOL
-    # Synthetic face uses old formula with explicit middle points: mouth_open = 0.3
-    assert abs(p['mouth_open'] - 0.3) < _TOL
+    assert abs(p['mouth_open'] - (3 / 20) / 0.5) < _TOL
     assert abs(p['brow_l'] - ((15 / 10) - 1.0) / (2.0 - 1.0)) < _TOL
     assert abs(p['brow_r'] - 0.5) < _TOL
     assert abs(p['head_yaw']) < _TOL

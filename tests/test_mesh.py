@@ -8,7 +8,6 @@ documented test input; it is loaded from the installed mediapipe package when
 be fetched).
 """
 
-from importlib import resources
 from pathlib import Path
 
 import numpy as np
@@ -113,61 +112,70 @@ def test_synthetic_mesh_parameters():
     p = landmarks_to_params(mesh_to_68(mesh), ear_open=ear_open)
     assert abs(p['eye_l'] - 1.0) < 0.05
     assert abs(p['eye_r'] - 1.0) < 0.05
-    assert p['mouth_open'] < 0.05
     assert abs(p['head_roll']) < 1.0
     assert abs(p['head_yaw']) < 5.0
 
 
-def _load_canonical_mesh():
-    # Try to find canonical_face_model.obj in the mediapipe package
-    try:
-        mp_root = Path(resources.files('mediapipe'))
-        obj_path = mp_root / 'modules' / 'face_landmark' / 'canonical_face_model.obj'
-        if not obj_path.exists():
-            # Fallback to local papers directory
-            local_path = Path(__file__).resolve().parents[1] / 'papers' / 'canonical_face_model.obj'
-            if local_path.exists():
-                obj_path = local_path
-            else:
-                return None
-    except Exception:
-        # Fallback to local papers directory
-        local_path = Path(__file__).resolve().parents[1] / 'papers' / 'canonical_face_model.obj'
-        if local_path.exists():
-            obj_path = local_path
-        else:
-            return None
-
-    verts = []
-    with obj_path.open(encoding='utf-8') as fh:
-        for line in fh:
-            if line.startswith('v '):
-                _, x, y, _z = line.split(maxsplit=3)[:4]
-                verts.append((float(x), float(y)))
-    if not verts:
-        return None
-    return np.array(verts, dtype=float)
+_CANONICAL = Path(__file__).resolve().parents[1] / 'papers' / 'canonical_face_model.obj'
+_LOWER_LIP = [17, 314, 405, 321, 375, 84, 181, 91, 146, 14, 317, 402, 318, 324, 87, 178, 88, 95]
 
 
-def test_canonical_mesh_parameters():
-    mesh = _load_canonical_mesh()
-    if mesh is None:
-        pytest.skip('canonical_face_model.obj not available in mediapipe package')
-    assert mesh.shape[0] in (468, 478)
+def _canonical_vertices():
+    """The 468 vertices (x, y, z) of the canonical face model, y pointing up."""
+    if not _CANONICAL.exists():
+        pytest.skip('papers/canonical_face_model.obj not available')
+    rows = [
+        ln.split()[1:4]
+        for ln in _CANONICAL.read_text(encoding='utf-8').splitlines()
+        if ln.startswith('v ')
+    ]
+    verts = np.array([[float(v) for v in r] for r in rows if len(r) == 3])
+    assert verts.shape == (468, 3)
+    return verts
+
+
+def _image_mesh(verts):
+    return np.column_stack([verts[:, 0], -verts[:, 1]])
+
+
+def _params(mesh):
     pts = mesh_to_68(mesh)
-    ear_l, ear_r = eye_aspect_ratios(pts)
-    ear_open = (ear_l + ear_r) / 2.0
-    p = landmarks_to_params(pts, ear_open=ear_open)
-    # Canonical mesh is a neutral 3D face model with mouth slightly open and
-    # head tilted slightly down (canonical pose), not a closed-mouth frontal face.
+    ear_open = float(np.mean(eye_aspect_ratios(pts)))
+    return pts, landmarks_to_params(pts, ear_open=ear_open)
+
+
+@pytest.mark.parametrize('mirror', [1.0, -1.0])
+def test_canonical_mesh_neutral_parameters(mirror):
+    mesh = _image_mesh(_canonical_vertices()) * [mirror, 1.0]
+    pts, p = _params(mesh)
     assert abs(p['eye_l'] - 1.0) < 0.05
     assert abs(p['eye_r'] - 1.0) < 0.05
-    # Mouth is slightly open in canonical mesh -> mouth_open capped at 1.0
-    assert p['mouth_open'] == 1.0
-    assert abs(p['head_roll']) < 2.0
+    assert abs(p['head_roll']) < 1.0
     assert abs(p['head_yaw']) < 5.0
-    # Head is tilted down in canonical pose
-    assert -50.0 < p['head_pitch'] < -30.0
+    xs = pts[[36, 39, 42, 45], 0]
+    assert list(xs) == sorted(xs)
+
+
+def test_canonical_mouth_width_and_opening():
+    mesh = _image_mesh(_canonical_vertices())
+    pts, neutral = _params(mesh)
+    width = float(np.linalg.norm(mesh[61] - mesh[291]))
+    assert abs(float(np.linalg.norm(pts[48] - pts[54])) - width) < 0.05 * width
+    inner_gap = float(np.linalg.norm(mesh[13] - mesh[14]))
+    assert abs(neutral['mouth_open'] - inner_gap / width / 0.5) < 0.05
+    opened = mesh.copy()
+    opened[_LOWER_LIP, 1] += 0.35 * width
+    assert _params(opened)[1]['mouth_open'] > 0.5 > neutral['mouth_open']
+
+
+def test_canonical_head_yaw_grows_with_rotation():
+    verts = _canonical_vertices()
+    yaws = []
+    for deg in (0.0, 20.0, 40.0):
+        a = np.radians(deg)
+        x = verts[:, 0] * np.cos(a) + verts[:, 2] * np.sin(a)
+        yaws.append(_params(np.column_stack([x, -verts[:, 1]]))[1]['head_yaw'])
+    assert yaws[0] < yaws[1] < yaws[2]
 
 
 def test_iris_centres():

@@ -28,7 +28,6 @@ points nearest in x to the iBUG lid positions.
 
 from __future__ import annotations
 
-from collections import defaultdict  # noqa: PLC0415  # used in mesh_to_68
 from collections.abc import Sequence
 
 import numpy as np
@@ -180,9 +179,6 @@ _MIN_POINTS = 468
 _MAX_POINTS = 478
 _NDIM = 2
 _COORD_COUNTS = (2, 3)
-_MOUTH_OUTER_COUNT = 12
-_MOUTH_INNER_END = 20
-_LIP_LOOP_COUNT = 2
 _BRIDGE_CENTER_TOL = 10.0
 _BRIDGE_POINT_COUNT = 5
 _EAR_OPEN_DEFAULT = 0.3
@@ -314,7 +310,74 @@ def _eye_map(
     }
 
 
-def mesh_to_68(mesh: np.ndarray) -> np.ndarray:  # noqa: PLR0915, PLR0912
+def _lip_loops(xy: np.ndarray) -> tuple[list[int], list[int]]:
+    """Split FACEMESH_LIPS into its two closed loops and return (outer, inner).
+
+    The outer loop is the one with the larger extent in x.
+    """
+    verts = {i for e in FACEMESH_LIPS for i in e}
+    loops: list[list[int]] = []
+    while verts:
+        comp = {next(iter(verts))}
+        grew = True
+        while grew:
+            grew = False
+            for a, b in FACEMESH_LIPS:
+                if (a in comp) != (b in comp):
+                    comp |= {a, b}
+                    grew = True
+        verts -= comp
+        loops.append(_contour_loop(frozenset(e for e in FACEMESH_LIPS if e[0] in comp)))
+    loops.sort(key=lambda lp: float(np.ptp(xy[lp, 0])), reverse=True)
+    return loops[0], loops[1]
+
+
+def _ring(
+    xy: np.ndarray, loop: list[int], fracs_up: Sequence[float], fracs_dn: Sequence[float]
+) -> tuple[np.ndarray, np.ndarray, list[np.ndarray], list[np.ndarray]]:
+    """Corners and interior points of a closed lip loop.
+
+    Returns the left corner, the right corner, the upper points and the lower points, the last
+    two at the given fractions of the corner distance, both from left to right.
+    """
+    i_l = int(np.argmin(xy[loop, 0]))
+    i_r = int(np.argmax(xy[loop, 0]))
+    fwd = _arc_between(loop, i_l, i_r, True)
+    bwd = _arc_between(loop, i_l, i_r, False)
+    up, dn = (fwd, bwd) if xy[fwd, 1].mean() <= xy[bwd, 1].mean() else (bwd, fwd)
+    left, right = xy[loop[i_l]], xy[loop[i_r]]
+    upper = [xy[_lid_point(xy, up, left, right, f)] for f in fracs_up]
+    lower = [xy[_lid_point(xy, dn, left, right, f)] for f in fracs_dn]
+    return left, right, upper, lower
+
+
+def _mouth_points(xy: np.ndarray) -> np.ndarray:
+    """The 20 mouth points 48-67 from the two lip loops of the mesh.
+
+    48-59 follow the outer loop (48 left corner, 54 right corner, 49-53 upper, 55-59 lower)
+    and 60-67 the inner loop. Points 51, 52, 57 and 58, the ones that ``landmarks_to_params``
+    reads to measure the lip gap, are taken from the inner loop: the gap of the inner lips is
+    the mouth opening, the gap of the outer lips also holds the thickness of the lips.
+    """
+    outer, inner = _lip_loops(xy)
+    one6 = [k / 6.0 for k in range(1, 6)]
+    left, right, up, dn = _ring(xy, outer, one6, one6[::-1])
+    out = np.zeros((20, 2))
+    out[0], out[6] = left, right
+    out[1:6] = up
+    out[7:12] = dn
+    q = [0.25, 0.5, 0.75]
+    in_l, in_r, in_up, in_dn = _ring(xy, inner, q, q[::-1])
+    out[12], out[16] = in_l, in_r
+    out[13:16] = in_up
+    out[17:20] = in_dn
+    _, _, mid_up, mid_dn = _ring(xy, inner, [0.4, 0.6], [0.6, 0.4])
+    out[3], out[4] = mid_up
+    out[9], out[10] = mid_dn
+    return out
+
+
+def mesh_to_68(mesh: np.ndarray) -> np.ndarray:  # noqa: PLR0915
     """Convert one face mesh to a (68, 2) frame in the iBUG ordering.
 
     Args:
@@ -414,60 +477,7 @@ def mesh_to_68(mesh: np.ndarray) -> np.ndarray:  # noqa: PLR0915, PLR0912
     # 32-35: replicate tip (iBUG 31-35 are often same as 30)
     out[32:36] = out[30]
 
-    # Mouth: 48-67 from the lips contours (outer + inner).
-    # FACEMESH_LIPS has two closed loops: outer lips (20 vertices) and inner lips (20 vertices).
-    # iBUG mouth has 20 points: 12 outer (48-59), 8 inner (60-67).
-    # Get both lip loops by finding connected components in the edge graph.
-    adj = defaultdict(list)
-    for a, b in FACEMESH_LIPS:
-        adj[a].append(b)
-        adj[b].append(a)
-    visited = set()
-    lip_loops = []
-    for v in adj:
-        if v not in visited:
-            loop = []
-            cur = v
-            prev = None
-            while True:
-                visited.add(cur)
-                loop.append(cur)
-                nbs = [n for n in adj[cur] if n != prev]
-                if not nbs:
-                    break
-                nxt = nbs[0]
-                if nxt == loop[0]:
-                    break
-                prev, cur = cur, nxt
-                if len(loop) > len(adj) + 2:
-                    break
-            lip_loops.append(loop)
-
-    # Sort loops by size (outer first, then inner) and by y-position
-    lip_loops.sort(key=lambda L: (len(L), -xy[L, 1].mean()))
-    if len(lip_loops) >= _LIP_LOOP_COUNT:
-        outer_loop, inner_loop = lip_loops[0], lip_loops[1]
-    else:
-        # Fallback: single loop
-        outer_loop = lip_loops[0] if lip_loops else []
-        inner_loop = []
-
-    # Map outer loop to iBUG 48-59 (12 points)
-    for j in range(12):
-        idx = outer_loop[len(outer_loop) * j // 12]
-        out[48 + j] = xy[int(idx)]
-    # Map inner loop to iBUG 60-67 (8 points)
-    for j in range(8):
-        idx = inner_loop[len(inner_loop) * j // 8]
-        out[60 + j] = xy[int(idx)]
-    # Centre the mouth on the lips' mean so a closed mouth reads neutral.
-    mouth_mean = out[48:68].mean(axis=0)
-    all_lip_idx = np.array(outer_loop + inner_loop)
-    lip_mean_x = xy[all_lip_idx, 0].mean()
-    lip_mean_y = xy[all_lip_idx, 1].mean()
-    shift = np.array([lip_mean_x - mouth_mean[0], lip_mean_y - mouth_mean[1]])
-    for k in range(48, 68):
-        out[k] = out[k] + shift
+    out[48:68] = _mouth_points(xy)
     return out
 
 

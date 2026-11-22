@@ -78,11 +78,7 @@ def landmarks_to_params(points: np.ndarray, ear_open: float = EAR_OPEN_DEFAULT) 
         'eye_r': float(np.clip(ear_r / scale, 0.0, 1.0)),
     }
     mouth_w = float(np.linalg.norm(pts[48] - pts[54]))
-    # Use the traditional formula: vertical distance between upper and lower lip midpoints
-    # Upper lip middle: indices 51, 52; Lower lip middle: indices 57, 58 (iBUG convention)
-    upper_mid = pts[51:53].mean(axis=0)
-    lower_mid = pts[57:59].mean(axis=0)
-    mouth_h = float(np.linalg.norm(upper_mid - lower_mid))
+    mouth_h = float(np.linalg.norm(pts[51:53].mean(axis=0) - pts[57:59].mean(axis=0)))
     params['mouth_open'] = float(np.clip(mouth_h / (mouth_w + _EPS) / _MOUTH_MAX, 0.0, 1.0))
     for name, brow, eye in (('brow_l', slice(17, 22), _EYE_L), ('brow_r', slice(22, 27), _EYE_R)):
         eye_w = float(np.linalg.norm(pts[eye[0]] - pts[eye[3]]))

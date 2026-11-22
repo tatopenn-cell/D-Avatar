@@ -22,11 +22,19 @@ default :class:`mediapipe.tasks.vision.FaceLandmarker`.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
 
 from d_avatar.mesh import iris_centres, mesh_to_68
+
+
+def _to_mp_image(rgb: np.ndarray) -> Any:
+    """Wrap an RGB array in a MediaPipe Image; ``mediapipe`` is imported here only."""
+    import mediapipe as mp  # type: ignore[import-untyped]  # noqa: PLC0415
+
+    return mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb))
 
 
 class FaceDetector:
@@ -38,30 +46,26 @@ class FaceDetector:
             a list of landmarks with ``x``/``y`` normalized coordinates, as
             MediaPipe's ``FaceLandmarkerResult``). An empty list means no
             face.
+        to_image: converts the numpy image into what the landmarker reads (None keeps the
+            array). ``open_default`` passes the MediaPipe Image converter.
     """
 
-    def __init__(self, landmarker: Any) -> None:
+    def __init__(
+        self, landmarker: Any, to_image: Callable[[np.ndarray], Any] | None = None
+    ) -> None:
         self._landmarker = landmarker
-
-    def _to_mp_image(self, image: Any) -> Any:
-        """Convert numpy array to MediaPipe Image if needed."""
-        if isinstance(image, np.ndarray):
-            import mediapipe as mp  # type: ignore[import-untyped]  # noqa: PLC0415
-
-            return mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(image))
-        return image
+        self._to_image = to_image
 
     def detect(self, image: Any, t: float) -> dict:
         """Detect landmarks in ``image`` and return the pipeline frame dict.
 
         Args:
-            image: RGB image as numpy array (H, W, 3) or MediaPipe Image.
+            image: RGB image as a numpy array (H, W, 3).
             t: timestamp in seconds.
         """
-        # Convert numpy array to MediaPipe Image if needed
-        mp_image = self._to_mp_image(image)
-
-        result = self._landmarker.detect(mp_image)
+        h, w = np.asarray(image).shape[:2]
+        landmarker_input = self._to_image(image) if self._to_image is not None else image
+        result = self._landmarker.detect(landmarker_input)
         faces = getattr(result, 'face_landmarks', None) or []
         t = float(t)
         if not faces:
@@ -72,8 +76,6 @@ class FaceDetector:
                 'iris': np.zeros((2, 2), dtype=float),
             }
         landmarks = faces[0]
-        # MediaPipe landmarks are normalized [0,1], scale to image pixels
-        w, h = mp_image.width, mp_image.height
         mesh = np.array([[float(lm.x) * w, float(lm.y) * h] for lm in landmarks], dtype=float)
         points = mesh_to_68(mesh)
         confidence: np.ndarray = np.ones(68, dtype=float)
@@ -121,4 +123,4 @@ class FaceDetector:
             output_facial_transformation_matrixes=False,
         )
         landmarker = FaceLandmarker.create_from_options(options)
-        return cls(landmarker)
+        return cls(landmarker, to_image=_to_mp_image)
