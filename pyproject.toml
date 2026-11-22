@@ -15,6 +15,9 @@ dependencies = [
 
 [project.optional-dependencies]
 osc = ["python-osc>=1.8"]
+cam = ["opencv-python>=4.8"]
+mp = ["mediapipe>=0.10"]
+all = ["osc", "cam", "mp"]
 docs = ["mkdocs>=1.5", "mkdocs-material>=9.0"]
 dev = ["pytest>=7.4", "ruff>=0.4", "mypy>=1.9"]
 

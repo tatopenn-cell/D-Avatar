@@ -21,17 +21,24 @@ class CameraSource:
         clock: clock callable returning seconds (default ``time.perf_counter``).
     """
 
-    def __init__(self, cap: Any, clock: Callable[[], float] = time.perf_counter) -> None:
+    def __init__(self, cap: Any, clock: Callable[[], float] | None = None) -> None:
         self._cap = cap
-        self._clock = clock
+        self._clock = clock if clock is not None else time.perf_counter
+        self._start_t: float | None = None
 
     def frames(self) -> Iterator[tuple[float, Any]]:
-        """Yield ``(t, image)`` until the capture reports no frame."""
+        """Yield ``(t, image)`` until the capture reports no frame.
+
+        Timestamps are relative to the first frame (start at 0).
+        """
         while True:
             ok, image = self._cap.read()
             if not ok:
                 return
-            yield (self._clock(), image)
+            t = self._clock()
+            if self._start_t is None:
+                self._start_t = t
+            yield (t - self._start_t, image)
 
     def close(self) -> None:
         """Release the capture."""
@@ -43,7 +50,9 @@ class CameraSource:
 
         ``opencv-python`` is imported only here.
         """
-        import cv2  # noqa: PLC0415  # intentional lazy import
+        import cv2  # noqa: PLC0415  # type: ignore[import-not-found]
 
         cap = cv2.VideoCapture(index)
+        if not cap.isOpened():
+            raise RuntimeError(f'Cannot open camera index {index}')
         return cls(cap)

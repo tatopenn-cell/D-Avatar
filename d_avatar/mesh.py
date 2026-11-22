@@ -34,6 +34,7 @@ import numpy as np
 
 # FACEMESH vertex sets, fetched from the official MediaPipe source
 # mediapipe/python/solutions/face_mesh_connections.py and printed before use.
+# Copyright 2021 The MediaPipe Authors. Licensed under Apache-2.0.
 FACEMESH_LEFT_EYE = frozenset(
     [
         (263, 249),
@@ -180,6 +181,8 @@ _NDIM = 2
 _COORD_COUNTS = (2, 3)
 _MOUTH_OUTER_COUNT = 12
 _MOUTH_INNER_END = 20
+_BRIDGE_CENTER_TOL = 10.0
+_BRIDGE_POINT_COUNT = 5
 _EAR_OPEN_DEFAULT = 0.3
 
 
@@ -253,9 +256,14 @@ def _lid_point(
 def _eye_map(
     mesh: np.ndarray,
     contour: frozenset[tuple[int, int]],
-    is_left: bool,
+    contour_name: str,
 ) -> dict[str, int]:
     """Map one eye contour to its six iBUG eye indices (36-41 or 42-47).
+
+    The corner assignment is by image position, not by contour name:
+    - min-x corner of the contour is the OUTER corner (temple side)
+    - max-x corner is the INNER corner (nose side)
+    This holds for both contours in a non-mirrored camera image.
 
     Returns a dict with keys ``outer``, ``inner``, ``top1``, ``top2``,
     ``bot1``, ``bot2`` holding mesh vertex indices.
@@ -275,14 +283,9 @@ def _eye_map(
         top_arc, bot_arc = arc_bwd, arc_fwd
     corner_min = mesh[int(loop[i_min])]
     corner_max = mesh[int(loop[i_max])]
-    if is_left:
-        # iBUG left eye: 36 = outer = min-x corner, 39 = inner = max-x corner.
-        outer_idx = int(loop[i_min])
-        inner_idx = int(loop[i_max])
-    else:
-        # iBUG right eye: 42 = inner = min-x corner, 45 = outer = max-x corner.
-        inner_idx = int(loop[i_min])
-        outer_idx = int(loop[i_max])
+    # min-x corner = OUTER (temple), max-x corner = INNER (nose)
+    outer_idx = int(loop[i_min])
+    inner_idx = int(loop[i_max])
     top1 = _lid_point(mesh, top_arc, corner_min, corner_max, 1.0 / 3.0)
     top2 = _lid_point(mesh, top_arc, corner_min, corner_max, 2.0 / 3.0)
     bot1 = _lid_point(mesh, bot_arc, corner_min, corner_max, 1.0 / 3.0)
@@ -321,11 +324,12 @@ def mesh_to_68(mesh: np.ndarray) -> np.ndarray:  # noqa: PLR0915
     xy = pts[:, :2]
     out: np.ndarray = np.full((68, 2), np.nan, dtype=float)
 
-    left_map = _eye_map(xy, FACEMESH_LEFT_EYE, is_left=True)
-    right_map = _eye_map(xy, FACEMESH_RIGHT_EYE, is_left=False)
+    # Map both eye contours by image position.
+    left_map = _eye_map(xy, FACEMESH_LEFT_EYE, 'LEFT')
+    right_map = _eye_map(xy, FACEMESH_RIGHT_EYE, 'RIGHT')
 
-    # Assign contours to iBUG eyes by image x position so head_roll stays
-    # level for a frontal face: lower mean x -> iBUG 36-41, higher -> 42-47.
+    # Assign contours to iBUG eyes by image x position:
+    # lower mean x -> iBUG 36-41 (left eye), higher -> 42-47 (right eye).
     left_pts = xy[list(FACEMESH_LEFT_EYE)]
     right_pts = xy[list(FACEMESH_RIGHT_EYE)]
     if float(left_pts[:, 0].mean()) <= float(right_pts[:, 0].mean()):
@@ -333,14 +337,14 @@ def mesh_to_68(mesh: np.ndarray) -> np.ndarray:  # noqa: PLR0915
     else:
         first, second = right_map, left_map
 
-    # iBUG 36-41: left eye.
+    # iBUG 36-41: left eye. outer=36 (temple), inner=39 (nose).
     out[36] = xy[first['outer']]
     out[37] = xy[first['top1']]
     out[38] = xy[first['top2']]
     out[39] = xy[first['inner']]
     out[40] = xy[first['bot1']]
     out[41] = xy[first['bot2']]
-    # iBUG 42-47: right eye.
+    # iBUG 42-47: right eye. inner=42 (nose), outer=45 (temple).
     out[42] = xy[second['inner']]
     out[43] = xy[second['top1']]
     out[44] = xy[second['top2']]
@@ -349,46 +353,63 @@ def mesh_to_68(mesh: np.ndarray) -> np.ndarray:  # noqa: PLR0915
     out[47] = xy[second['bot2']]
 
     # Brows: 17-26 from the two eyebrow contours (5 points each).
+    # Each contour has 10 vertices; pick 5 by sampling along the sorted x.
     brow_contours = [FACEMESH_LEFT_EYEBROW, FACEMESH_RIGHT_EYEBROW]
     for k, brow in enumerate(brow_contours):
         b = np.array(sorted({i for e in brow for i in e}), dtype=int)
         bpts = xy[b]
         order = np.argsort(bpts[:, 0])
-        for j, idx in enumerate(order):
+        # 5 points evenly spaced across the contour
+        for j in range(5):
+            idx = order[len(order) * j // 5]
             out[17 + k * 5 + j] = xy[int(b[idx])]
 
-    # Nose: 27-35 from the nose contour, tip at the lowest y (image coords).
+    # Nose: 27-35 from the nose contour.
     nose = np.array(sorted({i for e in FACEMESH_NOSE for i in e}), dtype=int)
     nose_pts = xy[nose]
     tip = nose[int(np.argmax(nose_pts[:, 1]))]
     out[30] = xy[int(tip)]
-    # Nose bridge between the eyes: use the two nose points nearest the eye
-    # inner corners, spread across indices 27-31.
+    # Nose bridge 27-31: five points from the nose contour between the eyes.
+    # Pick vertices nearest the eye inner corners, ordered by y.
     left_inner = xy[first['inner']]
     right_inner = xy[second['inner']]
-    bridge_x = (float(left_inner[0]) + float(right_inner[0])) / 2.0
-    bridge_y = min(float(left_inner[1]), float(right_inner[1])) - 2.0
-    out[27:31] = np.stack([np.full(4, bridge_x), np.linspace(bridge_y, bridge_y + 6.0, 4)], axis=1)
-    out[31:36] = out[30]
+    bridge_center_x = (float(left_inner[0]) + float(right_inner[0])) / 2.0
+    # Sort nose vertices by x to find ones near the center
+    nose_x_order = np.argsort(nose_pts[:, 0])
+    # Filter to x near center
+    center_mask = np.abs(nose_pts[nose_x_order, 0] - bridge_center_x) < _BRIDGE_CENTER_TOL
+    bridge_candidates = nose[nose_x_order][center_mask]
+    if len(bridge_candidates) >= _BRIDGE_POINT_COUNT:
+        bridge_order = np.argsort(xy[bridge_candidates, 1])
+        bridge_sel = bridge_candidates[bridge_order[:_BRIDGE_POINT_COUNT]]
+    elif len(bridge_candidates) > 0:
+        # Not enough candidates, replicate what we have
+        bridge_sel = np.resize(bridge_candidates, 5)
+    else:
+        # No candidates near center, use tip position for all bridge points
+        bridge_sel = np.full(5, tip, dtype=int)
+    out[27:32] = xy[bridge_sel]
+    # 32-35: replicate tip (iBUG 31-35 are often same as 30)
+    out[32:36] = out[30]
 
-    # Mouth: 48-67 from the lips contour (outer + inner lips).
-    lips = np.array(sorted({i for e in FACEMESH_LIPS for i in e}), dtype=int)
-    lip_pts = xy[lips]
-    cx = float(lip_pts[:, 0].mean())
-    cy = float(lip_pts[:, 1].mean())
-    order = np.argsort(lip_pts[:, 0])
-    outer = lips[order[:_MOUTH_OUTER_COUNT]]
-    inner = (
-        lips[order[_MOUTH_OUTER_COUNT:_MOUTH_INNER_END]]
-        if len(order) >= _MOUTH_INNER_END
-        else lips[order[_MOUTH_OUTER_COUNT:]]
-    )
-    for j, idx in enumerate(outer):
-        out[48 + j] = xy[int(idx)]
-    for j, idx in enumerate(inner):
-        out[60 + j] = xy[int(idx)]
+    # Mouth: 48-67 from the lips contour in contour order (not x-sorted).
+    # Walk the contour loop and pick 20 vertices.
+    lips_loop = _contour_loop(FACEMESH_LIPS)
+    lips_pts = xy[lips_loop]
+    n_lips = len(lips_loop)
+    # iBUG mouth has 20 points: 12 outer (48-59), 8 inner (60-67).
+    # Outer: 48-59 follow the upper lip left->right, then lower lip right->left.
+    # Inner: 60-67 follow inner contour.
+    # We approximate by taking evenly spaced points from the loop.
+    for j in range(20):
+        idx = lips_loop[n_lips * j // 20]
+        if j < _MOUTH_OUTER_COUNT:
+            out[48 + j] = xy[int(idx)]
+        else:
+            out[60 + (j - _MOUTH_OUTER_COUNT)] = xy[int(idx)]
     # Centre the mouth on the lips' mean so a closed mouth reads neutral.
-    shift = np.array([cx - out[48:68, 0].mean(), cy - out[48:68, 1].mean()])
+    mouth_mean = out[48:68].mean(axis=0)
+    shift = np.array([lips_pts[:, 0].mean() - mouth_mean[0], lips_pts[:, 1].mean() - mouth_mean[1]])
     for k in range(48, 68):
         out[k] = out[k] + shift
     return out
@@ -416,9 +437,9 @@ def iris_centres(mesh: np.ndarray) -> np.ndarray:
     left_pts = xy[list(FACEMESH_LEFT_EYE)]
     right_pts = xy[list(FACEMESH_RIGHT_EYE)]
     if float(left_pts[:, 0].mean()) <= float(right_pts[:, 0].mean()):
-        first_iris, second_iris = FACEMESH_RIGHT_IRIS, FACEMESH_LEFT_IRIS
-    else:
         first_iris, second_iris = FACEMESH_LEFT_IRIS, FACEMESH_RIGHT_IRIS
+    else:
+        first_iris, second_iris = FACEMESH_RIGHT_IRIS, FACEMESH_LEFT_IRIS
 
     def centre(iris_edges: frozenset[tuple[int, int]]) -> np.ndarray:
         idx = np.array(sorted({i for e in iris_edges for i in e}), dtype=int)

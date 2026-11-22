@@ -28,21 +28,17 @@ class _FakeCap:
         self.released = True
 
 
-def test_frames_yield_non_decreasing_timestamps_near_zero():
-    now = [0.0]
-
-    def clock():
-        result = now[0]
-        now[0] += 0.033
-        return result
-
+def test_frames_yield_relative_timestamps_starting_near_zero():
+    """Timestamps should start near 0 and be non-decreasing."""
     cap = _FakeCap(5)
-    src = CameraSource(cap, clock=clock)
+    src = CameraSource(cap, clock=lambda: 0.0)
     frames = list(src.frames())
     assert len(frames) == 5
     ts = [t for t, _ in frames]
-    assert abs(ts[0]) < 1e-6  # first timestamp starts near 0
-    assert all(b >= a for a, b in zip(ts, ts[1:], strict=False))  # non-decreasing
+    # First timestamp should be ~0 (relative to start)
+    assert abs(ts[0]) < 1e-6
+    # Non-decreasing
+    assert all(b >= a for a, b in zip(ts, ts[1:], strict=False))
 
 
 def test_frames_stop_on_failing_read():
@@ -57,3 +53,22 @@ def test_close_releases_capture():
     src = CameraSource(cap)
     src.close()
     assert cap.released is True
+
+
+def test_frames_with_advancing_clock():
+    """Timestamps advance with the clock."""
+    now = [0.0]
+
+    def clock():
+        result = now[0]
+        now[0] += 0.033
+        return result
+
+    cap = _FakeCap(5)
+    src = CameraSource(cap, clock=clock)
+    frames = list(src.frames())
+    ts = [t for t, _ in frames]
+    assert abs(ts[0]) < 1e-6
+    # Differences should be ~0.033
+    diffs = [b - a for a, b in zip(ts, ts[1:], strict=False)]
+    assert all(abs(d - 0.033) < 1e-3 for d in diffs)

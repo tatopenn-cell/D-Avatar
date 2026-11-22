@@ -95,7 +95,9 @@ def test_pipeline_gaze_rises_to_activated_at_max_step():
     pts = _gaze_face()
     max_step = 0.1
     ap = AvatarPipeline(max_step=max_step, use_shield=False)
+    # Iris at eye centre (neutral) -> gaze_x = 0
     neutral_iris = np.array([[25.0, 35.0], [65.0, 35.0]])
+    # Iris at outer corner -> gaze_x = +1
     activated_iris = np.array([[30.0, 35.0], [70.0, 35.0]])
 
     def frame(iris, t):
@@ -119,15 +121,17 @@ def test_pipeline_gaze_rises_to_activated_at_max_step():
 
 
 def test_pipeline_unchanged_without_iris():
+    """Frames without iris should return the same parameters as before (no gaze keys)."""
     pts = _gaze_face()
     ap = AvatarPipeline(use_shield=False)
     base = {'points': pts, 'confidence': np.ones(68), 't': 0.0}
-    with_iris = dict(base, iris=np.array([[25.0, 35.0], [50.0, 35.0]]))
-    p_without = ap.step(dict(base))
-    p_with = ap.step(with_iris)
-    # Without iris the keys and values are identical to today's (no gaze keys).
-    assert 'gaze_x' not in p_without
-    assert 'gaze_y' not in p_without
+    # Baseline without iris (today's behavior)
+    p_base = ap.step(dict(base))
+    # With iris
+    p_with = ap.step(dict(base, iris=np.array([[25.0, 35.0], [65.0, 35.0]])))
+    # Without iris the keys and values are identical to baseline (no gaze keys).
+    assert 'gaze_x' not in p_base
+    assert 'gaze_y' not in p_base
     assert 'gaze_x' in p_with and 'gaze_y' in p_with
-    for k, v in p_without.items():
+    for k, v in p_base.items():
         assert p_with[k] == v

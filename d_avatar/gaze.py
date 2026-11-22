@@ -78,10 +78,10 @@ class GazeCalibrator:
     """Real-time calibrator of the neutral iris displacement.
 
     Keeps a circular buffer of ``size`` trusted displacements. A new
-    displacement is trusted when it falls within the confidence interval
-    (mean +/- ``n_sigmas`` * std of the trusted displacements); trusted
-    displacements are inserted into the circular buffer, evicting the oldest.
-    The calibrated neutral displacement is the mean of the buffer.
+    displacement is trusted when it falls within the confidence
+    interval (mean +/- ``n_sigmas`` * std of the trusted displacements);
+    trusted displacements are inserted into the circular buffer, evicting the
+    oldest. The calibrated neutral displacement is the mean of the buffer.
 
     Args:
         size: circular buffer length (default 60).
@@ -121,8 +121,7 @@ class GazeCalibrator:
 
         A displacement is trusted when it falls within the confidence
         interval ``mean +/- n_sigmas * std``. Non-trusted displacements are
-        blended toward the current mean (influence ``_ALPHA``) so a single
-        outlier cannot jerk the calibrated neutral.
+        discarded (the paper's Algorithm 1 inserts the mean instead).
         """
         d = np.array([float(dx), float(dy)], dtype=float)
         if self._n == 0:

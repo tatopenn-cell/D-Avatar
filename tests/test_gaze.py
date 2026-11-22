@@ -67,10 +67,7 @@ def test_gaze_calibrator_outliers_rejected():
 
 
 def test_circular_buffer_recovers_last_size():
-    # Fill the buffer with neutral, then sustain a shift that lies inside the
-    # confidence interval. The calibrated neutral must reflect the last
-    # ``size`` trusted displacements (circular); a non-circular buffer would
-    # keep the first ones and report 0.0.
+    # Sustained shift inside confidence interval: buffer adapts.
     cal = GazeCalibrator(size=60)
     for _ in range(60):
         cal.update(0.0, 0.0)
@@ -79,3 +76,17 @@ def test_circular_buffer_recovers_last_size():
     nx, ny = cal.neutral()
     assert abs(nx - 0.2) < 1e-6
     assert abs(ny - 0.0) < 1e-6
+
+
+def test_non_trusted_not_inserted():
+    """Non-trusted displacements do not enter the buffer."""
+    cal = GazeCalibrator(size=60)
+    for _ in range(60):
+        cal.update(0.0, 0.0)
+    # 100 is far outside confidence interval, should be discarded.
+    for _ in range(100):
+        cal.update(100.0, 0.0)
+    # Neutral should remain near 0.
+    nx, ny = cal.neutral()
+    assert abs(nx) < 1e-6
+    assert abs(ny) < 1e-6

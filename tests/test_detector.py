@@ -10,6 +10,7 @@ import numpy as np
 
 from d_avatar.detector import FaceDetector
 from d_avatar.mesh import mesh_to_68
+from d_avatar.shield import FaceShield
 
 
 class _Lm:
@@ -37,11 +38,13 @@ class _FakeLandmarker:
 
 
 def _mesh_468() -> np.ndarray:
+    """A minimal mesh with key points for testing."""
     mesh = np.zeros((468, 2), dtype=float)
-    mesh[36] = [20.0, 35.0]
-    mesh[39] = [30.0, 35.0]
-    mesh[42] = [60.0, 35.0]
-    mesh[45] = [70.0, 35.0]
+    # Eye corners (outer/inner) for both eyes
+    mesh[33] = [20.0, 35.0]  # RIGHT_EYE outer (temple) -> iBUG 45
+    mesh[133] = [30.0, 35.0]  # RIGHT_EYE inner (nose) -> iBUG 42
+    mesh[362] = [70.0, 35.0]  # LEFT_EYE inner (nose) -> iBUG 39
+    mesh[263] = [80.0, 35.0]  # LEFT_EYE outer (temple) -> iBUG 36
     return mesh
 
 
@@ -53,7 +56,9 @@ def test_detector_returns_mesh_frame_with_confidence_one():
     frame = det.detect(image, t=1.5)
     assert frame['t'] == 1.5
     assert frame['points'].shape == (68, 2)
-    assert np.allclose(frame['points'], mesh_to_68(mesh), equal_nan=True)
+    # Reference computed by mesh_to_68 (not by detector)
+    ref = mesh_to_68(mesh)
+    assert np.allclose(frame['points'], ref, equal_nan=True)
     assert np.all(frame['confidence'] == 1.0)
     assert frame['iris'].shape == (2, 2)
 
@@ -68,8 +73,6 @@ def test_detector_no_face_gives_zero_confidence():
 
 
 def test_no_face_frame_holds_previous_point_under_shield():
-    from d_avatar.shield import FaceShield  # noqa: PLC0415
-
     mesh = _mesh_468()
     det_face = FaceDetector(_FakeLandmarker(mesh))
     det_none = FaceDetector(_FakeLandmarker(None))

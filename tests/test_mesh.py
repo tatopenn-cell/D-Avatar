@@ -9,6 +9,7 @@ be fetched).
 """
 
 from importlib import resources
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -37,6 +38,7 @@ def _synthetic_mesh_468() -> np.ndarray:
     x = 50 so head_yaw is 0; closed mouth so mouth_open is ~0.
     """
     mesh = np.zeros((468, 2), dtype=float)
+    # Face contours
     for contour, cx in ((FACEMESH_LEFT_EYE, 30.0), (FACEMESH_RIGHT_EYE, 70.0)):
         loop = _contour_loop(contour)
         for p, idx in enumerate(loop):
@@ -59,11 +61,11 @@ def _synthetic_mesh_478() -> np.ndarray:
     """The 468 neutral mesh plus the 10 refined iris vertices (469-477)."""
     mesh = _synthetic_mesh_468()
     mesh = np.vstack([mesh, np.zeros((10, 2), dtype=float)])
-    # Image-left eye (iBUG left) uses MediaPipe RIGHT_IRIS indices 469-472;
-    # image-right eye uses LEFT_IRIS indices 474-477 (see iris_centres).
-    for idx in range(469, 473):
+    # Image-left eye (iBUG left) uses MediaPipe LEFT_IRIS indices 474-477;
+    # image-right eye uses RIGHT_IRIS indices 469-472.
+    for idx in range(474, 478):
         mesh[idx] = [30.0, 35.0]
-    for idx in range(473, 478):
+    for idx in range(469, 473):
         mesh[idx] = [70.0, 35.0]
     return mesh
 
@@ -81,11 +83,13 @@ def test_synthetic_mesh_known_geometry():
     mesh = _synthetic_mesh_468()
     pts = mesh_to_68(mesh)
     assert pts.shape == (68, 2)
-    # Corners: outer = min-x corner, inner = max-x corner (iBUG order).
-    assert np.allclose(pts[36], [25.0, 35.0], atol=_TOL)  # left outer
-    assert np.allclose(pts[39], [35.0, 35.0], atol=_TOL)  # left inner
-    assert np.allclose(pts[42], [65.0, 35.0], atol=_TOL)  # right inner
-    assert np.allclose(pts[45], [75.0, 35.0], atol=_TOL)  # right outer
+    # Corners: outer = min-x corner (temple), inner = max-x corner (nose).
+    # Image-left eye (iBUG left) at x ~30: outer=36 at ~25, inner=39 at ~35.
+    assert np.allclose(pts[36], [25.0, 35.0], atol=_TOL)
+    assert np.allclose(pts[39], [35.0, 35.0], atol=_TOL)
+    # Image-right eye (iBUG right) at x ~70: inner=42 at ~75 (nose), outer=45 at ~65 (temple).
+    assert np.allclose(pts[42], [75.0, 35.0], atol=_TOL)
+    assert np.allclose(pts[45], [65.0, 35.0], atol=_TOL)
     # Lid points: upper lids above the corners, lower lids below.
     assert pts[37, 1] < 35.0 and pts[38, 1] < 35.0
     assert pts[40, 1] > 35.0 and pts[41, 1] > 35.0
@@ -107,21 +111,18 @@ def test_synthetic_mesh_parameters():
     assert abs(p['head_yaw']) < 5.0
 
 
-def _canonical_mesh_path():
-    try:
-        return resources.files('mediapipe').joinpath(
-            'modules', 'face_landmark', 'canonical_face_model.obj'
-        )
-    except Exception:  # pragma: no cover - older importlib.resources
-        return None
-
-
 def _load_canonical_mesh():
-    path = _canonical_mesh_path()
-    if path is None or not path.exists():
+    # Try to find canonical_face_model.obj in the mediapipe package
+    try:
+        mp_root = Path(resources.files('mediapipe'))
+        obj_path = mp_root / 'modules' / 'face_landmark' / 'canonical_face_model.obj'
+        if not obj_path.exists():
+            return None
+    except Exception:
         return None
+
     verts = []
-    with path.open(encoding='utf-8') as fh:
+    with obj_path.open(encoding='utf-8') as fh:
         for line in fh:
             if line.startswith('v '):
                 _, x, y, _z = line.split(maxsplit=3)[:4]
@@ -131,13 +132,10 @@ def _load_canonical_mesh():
     return np.array(verts, dtype=float)
 
 
-@pytest.mark.skipif(
-    _load_canonical_mesh() is None,
-    reason='canonical_face_model.obj is not part of the installed mediapipe '
-    'package and could not be fetched; skipping canonical-mesh sub-test',
-)
 def test_canonical_mesh_parameters():
     mesh = _load_canonical_mesh()
+    if mesh is None:
+        pytest.skip('canonical_face_model.obj not available in mediapipe package')
     assert mesh.shape[0] in (468, 478)
     pts = mesh_to_68(mesh)
     ear_l, ear_r = eye_aspect_ratios(pts)
@@ -159,3 +157,14 @@ def test_iris_centres():
     # 468-point mesh has no iris vertices -> zero centres.
     mesh468 = np.zeros((468, 2), dtype=float)
     assert np.allclose(iris_centres(mesh468), 0.0)
+
+
+def test_iris_mapping_consistent_with_contours():
+    """RIGHT_EYE contour and RIGHT_IRIS should map to same iBUG eye."""
+    mesh = _synthetic_mesh_478()
+    # Image-left eye at x~30 uses LEFT_EYE contour and LEFT_IRIS (474-477)
+    # Image-right eye at x~70 uses RIGHT_EYE contour and RIGHT_IRIS (469-472)
+    c = iris_centres(mesh)
+    # Both centres should be on their respective eye contours
+    assert abs(c[0, 0] - 30.0) < 1.0  # left iris near x=30
+    assert abs(c[1, 0] - 70.0) < 1.0  # right iris near x=70
