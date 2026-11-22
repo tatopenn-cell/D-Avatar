@@ -259,12 +259,13 @@ def _eye_map(
     mesh: np.ndarray,
     contour: frozenset[tuple[int, int]],
     target_range: str,  # '36-41' for DA1 RIGHT eye, '42-47' for DA1 LEFT eye
+    face_center_x: float,
 ) -> dict[str, int]:
     """Map one eye contour to its six iBUG eye indices (36-41 or 42-47).
 
     The corner assignment depends on the target index range:
     - '36-41' (DA1 RIGHT eye): outer=36 at MIN x (temple), inner=39 at MAX x (nose)
-    - '42-47' (DA1 LEFT eye): outer=45 at MIN x (temple), inner=42 at MAX x (nose)
+    - '42-47' (DA1 LEFT eye): inner=42 at nose side (face center), outer=45 at temple
 
     Returns a dict with keys ``outer``, ``inner``, ``top1``, ``top2``,
     ``bot1``, ``bot2`` holding mesh vertex indices.
@@ -289,9 +290,16 @@ def _eye_map(
         outer_idx = int(loop[i_min])
         inner_idx = int(loop[i_max])
     else:  # '42-47'
-        # DA1 LEFT eye (42-47): outer=45 at MIN x (temple), inner=42 at MAX x (nose)
-        outer_idx = int(loop[i_min])
-        inner_idx = int(loop[i_max])
+        # DA1 LEFT eye (42-47): inner=42 at nose side (face center), outer=45 at temple
+        # Nose side is toward face center. Determine by face center.
+        dist_min = abs(loop_pts[i_min, 0] - face_center_x)
+        dist_max = abs(loop_pts[i_max, 0] - face_center_x)
+        if dist_min < dist_max:
+            inner_idx = int(loop[i_min])
+            outer_idx = int(loop[i_max])
+        else:
+            inner_idx = int(loop[i_max])
+            outer_idx = int(loop[i_min])
     top1 = _lid_point(mesh, top_arc, corner_min, corner_max, 1.0 / 3.0)
     top2 = _lid_point(mesh, top_arc, corner_min, corner_max, 2.0 / 3.0)
     bot1 = _lid_point(mesh, bot_arc, corner_min, corner_max, 1.0 / 3.0)
@@ -338,16 +346,18 @@ def mesh_to_68(mesh: np.ndarray) -> np.ndarray:  # noqa: PLR0915, PLR0912
     left_pts = xy[list(left_eye_contour)]
     right_pts = xy[list(right_eye_contour)]
 
+    face_center_x = float(xy[:, 0].mean())
+
     if float(left_pts[:, 0].mean()) <= float(right_pts[:, 0].mean()):
         # LEFT_EYE contour at lower x = person's RIGHT eye -> indices 36-41
         # RIGHT_EYE contour at higher x = person's LEFT eye -> indices 42-47
-        eye_map_36_41 = _eye_map(xy, left_eye_contour, '36-41')
-        eye_map_42_47 = _eye_map(xy, right_eye_contour, '42-47')
+        eye_map_36_41 = _eye_map(xy, left_eye_contour, '36-41', face_center_x)
+        eye_map_42_47 = _eye_map(xy, right_eye_contour, '42-47', face_center_x)
     else:
         # LEFT_EYE contour at higher x = person's LEFT eye -> indices 42-47
         # RIGHT_EYE contour at lower x = person's RIGHT eye -> indices 36-41
-        eye_map_36_41 = _eye_map(xy, right_eye_contour, '36-41')
-        eye_map_42_47 = _eye_map(xy, left_eye_contour, '42-47')
+        eye_map_36_41 = _eye_map(xy, right_eye_contour, '36-41', face_center_x)
+        eye_map_42_47 = _eye_map(xy, left_eye_contour, '42-47', face_center_x)
 
     # Indices 36-41: RIGHT eye (person's RIGHT). outer=36 (temple), inner=39 (nose).
     out[36] = xy[eye_map_36_41['outer']]

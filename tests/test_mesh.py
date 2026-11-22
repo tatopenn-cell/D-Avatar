@@ -89,12 +89,14 @@ def test_synthetic_mesh_known_geometry():
     # Synthetic mesh: FACEMESH_LEFT_EYE at x=70 (person's LEFT eye),
     # FACEMESH_RIGHT_EYE at x=30 (person's RIGHT eye).
     # DA1 convention puts RIGHT eye at 36-41, LEFT eye at 42-47.
-    # Person's RIGHT eye (iBUG 36-41) at x~30: outer=36 at min x (25), inner=39 at max x (35).
+    # Person's RIGHT eye (iBUG 36-41) at x~30: outer=36 at min x (25, temple),
+    # inner=39 at max x (35, nose).
     assert np.allclose(pts[36], [25.0, 35.0], atol=_TOL)  # right outer (temple)
     assert np.allclose(pts[39], [35.0, 35.0], atol=_TOL)  # right inner (nose)
-    # Person's LEFT eye (iBUG 42-47) at x~70: inner=42 at max x (75), outer=45 at min x (65).
-    assert np.allclose(pts[42], [75.0, 35.0], atol=_TOL)  # left inner (nose)
-    assert np.allclose(pts[45], [65.0, 35.0], atol=_TOL)  # left outer (temple)
+    # Person's LEFT eye (iBUG 42-47) at x~70: inner=42 at min x (65, nose),
+    # outer=45 at max x (75, temple).
+    assert np.allclose(pts[42], [65.0, 35.0], atol=_TOL)  # left inner (nose)
+    assert np.allclose(pts[45], [75.0, 35.0], atol=_TOL)  # left outer (temple)
     # Lid points: upper lids above the corners, lower lids below.
     assert pts[37, 1] < 35.0 and pts[38, 1] < 35.0
     assert pts[40, 1] > 35.0 and pts[41, 1] > 35.0
