@@ -33,3 +33,4 @@ Thumbs.db
 docs/site/
 *.log
 tmp/
+face_landmarker.task

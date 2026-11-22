@@ -16,6 +16,7 @@ import numpy as np
 from dense_armor.core.signals.vision.landmarks import LandmarkStream  # type: ignore[import-untyped]
 from dense_armor.roles import RealtimePipeline, Transformer  # type: ignore[import-untyped]
 
+from d_avatar.gaze import GazeCalibrator, iris_displacement
 from d_avatar.params import (
     BlinkCalibrator,
     RateBound,
@@ -28,11 +29,18 @@ from d_avatar.vmc import VmcSender
 
 _UNIT_KEYS = ('eye_l', 'eye_r', 'mouth_open', 'brow_l', 'brow_r')
 _HEAD_KEYS = ('head_yaw', 'head_pitch', 'head_roll')
+_GAZE_KEYS = ('gaze_x', 'gaze_y')
 _EMA_ALPHA = 0.3
 
 
 class ParamsStep(Transformer):
-    """Landmarks to parameters: calibrated eye opening, EMA on [0, 1] values, rate bounds.
+    """Landmarks to parameters: calibrated eye opening, EMA on [0, 1] values,
+    rate bounds, and gaze from the iris.
+
+    When a frame carries ``iris``, ``gaze_x`` and ``gaze_y`` are computed with
+    :class:`d_avatar.gaze.GazeCalibrator`, smoothed like the other [0, 1]
+    values and limited with the same ``max_step``. Frames without ``iris``
+    return the parameters unchanged (no gaze keys).
 
     Args:
         max_step: maximum change per frame of the [0, 1] parameters.
@@ -47,7 +55,9 @@ class ParamsStep(Transformer):
         self.max_step_deg = float(max_step_deg)
         self.bound = RateBound(self.max_step, dict.fromkeys(_HEAD_KEYS, self.max_step_deg))
         self.calibrator = BlinkCalibrator()
+        self.gaze_calibrator = GazeCalibrator()
         self._ema: dict[str, float] = {}
+        self._gaze_ema: dict[str, float] = {}
 
     def transform_one(self, x: dict, t: float | None = None) -> dict:
         pts = np.asarray(x['points'], dtype=float)
@@ -62,6 +72,24 @@ class ParamsStep(Transformer):
         for k in _HEAD_KEYS:
             params[k] = self.bound.step(k, params[k])
         params['blink'] = 1.0 if self.calibrator.is_blink(ear) else 0.0
+        if 'iris' in x and x['iris'] is not None:
+            iris = np.asarray(x['iris'], dtype=float)
+            dxs: list[float] = []
+            dys: list[float] = []
+            # (inner corner, outer corner, lid up, lid down) per iBUG eye.
+            # iris[0] is the left eye (iBUG 36-41), iris[1] the right eye (42-47).
+            for eye, (ci, co, lu, ld) in enumerate(((39, 36, 37, 40), (42, 45, 43, 46))):
+                dx, dy = iris_displacement(iris[eye], pts[ci], pts[co], pts[lu], pts[ld])
+                dxs.append(dx)
+                dys.append(dy)
+            dx = float(np.mean(dxs))
+            dy = float(np.mean(dys))
+            self.gaze_calibrator.update(dx, dy)
+            gx, gy = self.gaze_calibrator.gaze(dx, dy)
+            for name, g in (('gaze_x', gx), ('gaze_y', gy)):
+                smooth = ema(self._gaze_ema.get(name, g), g, _EMA_ALPHA)
+                self._gaze_ema[name] = smooth
+                params[name] = self.bound.step(name, smooth)
         return params
 
     def learn_one(self, x: dict, y: Any = None, t: float | None = None) -> ParamsStep:
@@ -153,8 +181,16 @@ class AvatarPipeline:
         return budget
 
     def step(self, frame: dict) -> dict:
-        """Process one frame ``{"points", "confidence", "t"}`` and return its parameters."""
-        params = self.params_step.transform_one(self.shield.transform_one(frame))
+        """Process one frame ``{"points", "confidence", "t"}`` and return its parameters.
+
+        The iris (when present in the frame) is passed through the shield to the
+        parameter step so gaze can be computed.
+        """
+        cleaned = self.shield.transform_one(frame)
+        x = dict(cleaned)
+        if 'iris' in frame:
+            x['iris'] = frame['iris']
+        params = self.params_step.transform_one(x, frame.get('t'))
         if self.vmc is not None:
             self.vmc.transform_one(params)
         return params

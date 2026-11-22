@@ -82,3 +82,56 @@ def test_run_without_python_osc_and_p99_within_budget():
         j <= 0.1 + 1e-6 for k, j in jumps.items() if not k.startswith('head') and k != 'blink'
     )
     assert p99 <= AvatarPipeline().total_budget_s
+
+
+def _gaze_face():
+    pts = synthetic_face_68()
+    # Left eye (iBUG 36-41): outer corner pts[36]=(20,35), inner pts[39]=(30,35),
+    # so iris at x=25 is neutral (dx=0) and at x=30 is activated (dx=+1).
+    return pts
+
+
+def test_pipeline_gaze_rises_to_activated_at_max_step():
+    pts = _gaze_face()
+    max_step = 0.1
+    ap = AvatarPipeline(max_step=max_step, use_shield=False)
+    # Iris at eye centre (neutral) -> gaze_x = 0
+    neutral_iris = np.array([[25.0, 35.0], [65.0, 35.0]])
+    # Iris at outer corner -> gaze_x = +1
+    activated_iris = np.array([[30.0, 35.0], [70.0, 35.0]])
+
+    def frame(iris, t):
+        return {
+            'points': pts,
+            'confidence': np.ones(68),
+            't': t,
+            'iris': iris,
+        }
+
+    gaze_x = []
+    for i in range(5):
+        gaze_x.append(ap.step(frame(neutral_iris, i / 30.0))['gaze_x'])
+    assert abs(gaze_x[-1]) < 1e-6  # gaze is 0 at the neutral displacement
+    for i in range(5, 35):
+        gaze_x.append(ap.step(frame(activated_iris, i / 30.0))['gaze_x'])
+    # Rises at most max_step per frame and reaches +1 at the activated displacement.
+    diffs = [abs(gaze_x[i + 1] - gaze_x[i]) for i in range(len(gaze_x) - 1)]
+    assert all(d <= max_step + 1e-6 for d in diffs)
+    assert abs(gaze_x[-1] - 1.0) < 0.02
+
+
+def test_pipeline_unchanged_without_iris():
+    """Frames without iris should return the same parameters as before (no gaze keys)."""
+    pts = _gaze_face()
+    ap = AvatarPipeline(use_shield=False)
+    base = {'points': pts, 'confidence': np.ones(68), 't': 0.0}
+    # Baseline without iris (today's behavior)
+    p_base = ap.step(dict(base))
+    # With iris
+    p_with = ap.step(dict(base, iris=np.array([[25.0, 35.0], [65.0, 35.0]])))
+    # Without iris the keys and values are identical to baseline (no gaze keys).
+    assert 'gaze_x' not in p_base
+    assert 'gaze_y' not in p_base
+    assert 'gaze_x' in p_with and 'gaze_y' in p_with
+    for k, v in p_base.items():
+        assert p_with[k] == v
