@@ -1,187 +1,190 @@
-"""
-Tests for FaceShield.
-
-Covers:
-- 1D Kalman step checked against hand-computed numbers from Thieu §2.1 pp. 4-5.
-- Moving occluder of 20 frames (Zhu protocol).
-- One-frame outlier.
-- Clean stream passes unchanged.
-- check_estimator(FaceShield()) passes with empty skip list.
-"""
-
 import numpy as np
 from dense_armor.checks import check_estimator
 from dense_armor.core.online.timeseries.kalman import KalmanFilter
 
 from d_avatar.shield import FaceShield, _hampel_value
 
-# Tolerance constants
 _TOL_1E_9 = 1e-9
 _TOL_1E_6 = 1e-6
-_WARMUP_FRAMES = 10
-_DRIFT_TOL = 1.0
 _OUTLIER_TOL = 1.0
 _CLEANED_BOTH = 2
-_MAX_GAP_DECAY_START = 3
+
+
+def _frame(pts, conf, i, fps=30.0):
+    return {'points': pts, 'confidence': conf, 't': float(i) / fps}
 
 
 def test_hampel_value():
-    # Window [1, 2, 3], median=2, MAD=1, scale=1.4826
-    # Value 10 -> outlier, replaced by median 2
     val, is_out = _hampel_value([1.0, 2.0, 3.0], 10.0, 3.0)
     assert is_out
     assert abs(val - 2.0) < _TOL_1E_9
-    # Value 2.5 -> not outlier
     val, is_out = _hampel_value([1.0, 2.0, 3.0], 2.5, 3.0)
     assert not is_out
     assert abs(val - 2.5) < _TOL_1E_9
 
 
 def test_kalman_1d_hand_computed():
-    """Hand-computed 1D constant-velocity Kalman step (Thieu §2.1 pp. 4-5).
-    State: [pos, vel], dt=1.0
-    F = [[1, 1], [0, 1]], H = [[1, 0]]
-    Q = diag(0.01, 0.1), R = [[0.1]]
-    x0 = [0, 0], P0 = I
-    Measurement z = 1.0
-    Actual measured values from dense_armor KalmanFilter:
-    x = [0.9526067, 0.47393367]
-    """
-    dt = 1.0
-    F = np.array([[1.0, dt], [0.0, 1.0]], dtype=np.float64)
-    H = np.array([[1.0, 0.0]], dtype=np.float64)
-    Q = np.diag([0.01, 0.1])
-    R = np.array([[0.1]], dtype=np.float64)
-
-    kf = KalmanFilter(F=F, H=H, Q=Q, R=R, x0=np.array([0.0, 0.0]), P0=np.eye(2))
-    _ = kf.learn_one({'pos': 1.0})
-
-    # Measured values (from script run)
-    assert abs(kf._x[0] - 0.9526067) < _TOL_1E_6
-    assert abs(kf._x[1] - 0.47393367) < _TOL_1E_6
-    # Covariance trace should be reduced vs prior
-    assert np.trace(kf._P) < np.trace(np.eye(2) + Q)
+    f = np.array([[1.0, 1.0], [0.0, 1.0]])
+    h = np.array([[1.0, 0.0]])
+    q = np.diag([0.01, 0.1])
+    r = np.array([[0.1]])
+    kf = KalmanFilter(F=f, H=h, Q=q, R=r, x0=np.zeros(2), P0=np.eye(2))
+    kf.learn_one({'pos': 1.0})
+    s = 2.0 + 0.01 + 0.1
+    assert abs(kf._x[0] - (2.01 / s)) < _TOL_1E_6
+    assert abs(kf._x[1] - (1.0 / s)) < _TOL_1E_6
 
 
 def test_face_shield_clean_stream():
-    """Clean stream with no outliers, no occlusions -> passes unchanged (within filter smoothing).
-    Measured max drift after warmup: ~0.68 on scale 0..90.
-    """
     shield = FaceShield(window=7, n_sigmas=3.0, max_gap=5)
     n = 10
     pts = np.tile(np.arange(n, dtype=np.float32).reshape(n, 1), (1, 2)) * 10.0
     conf = np.ones(n, dtype=np.float32)
-
     for i in range(20):
-        frame = {
-            'points': pts,
-            'confidence': conf,
-            't': float(i) / 30.0,
-        }
-        out = shield.transform_one(frame)
-        if i >= _WARMUP_FRAMES:
-            diff = np.abs(out['points'] - pts).max()
-            # Measured max drift ~0.68, allow < 1.0
-            assert diff < _DRIFT_TOL, f'Clean stream drifted: max diff {diff}'
+        out = shield.transform_one(_frame(pts, conf, i))
+        assert np.abs(out['points'] - pts).max() < _TOL_1E_6
         assert out['cleaned'].sum() == 0
 
 
 def test_face_shield_one_frame_outlier():
-    """Single frame with one outlier point -> replaced by Hampel median."""
     shield = FaceShield(window=7, n_sigmas=3.0, max_gap=5)
-    n = 5
-    base_pts = np.tile(np.arange(n, dtype=np.float32).reshape(n, 1), (1, 2)) * 10.0
-    conf = np.ones(n, dtype=np.float32)
-
+    base = np.tile(np.arange(5, dtype=np.float32).reshape(5, 1), (1, 2)) * 10.0
+    conf = np.ones(5, dtype=np.float32)
     for i in range(10):
-        shield.transform_one({'points': base_pts, 'confidence': conf, 't': float(i) / 30.0})
-
-    bad_pts = base_pts.copy()
-    bad_pts[2] = [999.0, 999.0]
-    out = shield.transform_one({'points': bad_pts, 'confidence': conf, 't': 0.5})
-    # Point 2 should be cleaned back to near base (measured ~20.1 vs base 20.0)
-    assert np.abs(out['points'][2, 0] - base_pts[2, 0]) < _OUTLIER_TOL
-    assert np.abs(out['points'][2, 1] - base_pts[2, 1]) < _OUTLIER_TOL
+        shield.transform_one(_frame(base, conf, i))
+    bad = base.copy()
+    bad[2] = [999.0, 999.0]
+    out = shield.transform_one(_frame(bad, conf, 10))
+    assert np.abs(out['points'][2] - base[2]).max() < _OUTLIER_TOL
     assert out['cleaned'][2] == _CLEANED_BOTH
 
 
-def test_face_shield_moving_occluder_zhu_protocol():
-    """Moving occlusion across face (Zhu et al. 2021, intro pp. 1-2, 4-5).
-    20-frame occlusion moving across points. Predict-only should track.
-    Measured max error on static face: ~28.3 (due to velocity random walk).
-    This test verifies the predict-only branch runs and fills occluded points.
-    """
-    shield = FaceShield(window=7, n_sigmas=3.0, max_gap=5, neutral=None)
+def test_face_shield_moving_occluder_static_face():
+    shield = FaceShield(window=7, n_sigmas=3.0, max_gap=5)
     n = 8
-    base_pts = np.zeros((n, 2), dtype=np.float32)
-    for i in range(n):
-        base_pts[i] = [float(i) * 10.0, 0.0]
+    base = np.zeros((n, 2), dtype=np.float32)
+    base[:, 0] = np.arange(n) * 10.0
     conf = np.ones(n, dtype=np.float32)
-
     for i in range(10):
-        shield.transform_one({'points': base_pts, 'confidence': conf, 't': float(i) / 30.0})
-
+        shield.transform_one(_frame(base, conf, i))
     max_err = 0.0
-    for frame_idx in range(20):
-        occ_pts = base_pts.copy()
-        occ_conf = conf.copy()
-        start = frame_idx % (n - 1)
-        occ_conf[start] = 0.0
-        occ_conf[start + 1] = 0.0
-        out = shield.transform_one(
-            {
-                'points': occ_pts,
-                'confidence': occ_conf,
-                't': float(10 + frame_idx) / 30.0,
-            }
-        )
-        for p in (start, start + 1):
-            err = np.linalg.norm(out['points'][p] - base_pts[p])
-            max_err = max(max_err, err)
+    for k in range(20):
+        c = conf.copy()
+        s = k % (n - 1)
+        c[s] = 0.0
+        c[s + 1] = 0.0
+        out = shield.transform_one(_frame(base, c, 10 + k))
+        for p in (s, s + 1):
+            max_err = max(max_err, float(np.linalg.norm(out['points'][p] - base[p])))
             assert out['cleaned'][p] == _CLEANED_BOTH
-
-    # Verify predict-only branch executed (error > 0 shows prediction ran)
-    assert max_err > 0.0
-    # Measured max_err ~28.3, documented in test name
+    assert max_err < 1.0
 
 
-def test_face_shield_gap_exceeds_max_gap_decays_to_neutral():
-    """Gap > max_gap -> decays toward neutral pose."""
+def test_face_shield_constant_velocity_during_gap():
+    shield = FaceShield(window=7, n_sigmas=3.0, max_gap=10)
+    conf = np.ones(1, dtype=np.float32)
+    for i in range(60):
+        shield.transform_one(_frame(np.array([[i * 3.0, 0.0]], dtype=np.float32), conf, i))
+    off = np.zeros(1, dtype=np.float32)
+    for i in range(10):
+        out = shield.transform_one(_frame(np.array([[0.0, 0.0]], dtype=np.float32), off, 60 + i))
+        assert abs(out['points'][0, 0] - (177.0 + (i + 1) * 3.0)) < 1.0
+
+
+def test_face_shield_variable_fps():
+    shield = FaceShield(window=7, n_sigmas=3.0, max_gap=10)
+    conf = np.ones(1, dtype=np.float32)
+    for i in range(60):
+        pt = np.array([[i * 3.0, 0.0]], dtype=np.float32)
+        shield.transform_one(_frame(pt, conf, i, fps=15.0))
+    off = np.zeros(1, dtype=np.float32)
+    for i in range(5):
+        pt = np.array([[0.0, 0.0]], dtype=np.float32)
+        out = shield.transform_one(_frame(pt, off, 60 + i, fps=15.0))
+        assert abs(out['points'][0, 0] - (177.0 + (i + 1) * 3.0)) < 1.0
+
+
+def test_face_shield_gap_decays_to_neutral():
     neutral = np.array([[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]], dtype=np.float32)
     shield = FaceShield(window=7, n_sigmas=3.0, max_gap=3, neutral=neutral)
-    n = 3
-    conf = np.ones(n, dtype=np.float32)
-
+    conf = np.ones(3, dtype=np.float32)
+    moved = neutral + 5.0
     for i in range(10):
-        shield.transform_one({'points': neutral, 'confidence': conf, 't': float(i) / 30.0})
-
-    moved = neutral + np.array([[5.0, 5.0], [5.0, 5.0], [5.0, 5.0]], dtype=np.float32)
+        shield.transform_one(_frame(neutral, conf, i))
     for i in range(5):
-        shield.transform_one({'points': moved, 'confidence': conf, 't': float(10 + i) / 30.0})
+        shield.transform_one(_frame(moved, conf, 10 + i))
+    off = np.zeros(3, dtype=np.float32)
+    prev = [None] * 3
+    for i in range(15):
+        out = shield.transform_one(_frame(moved, off, 15 + i))
+        if i > 3:
+            for p in range(3):
+                d = float(np.linalg.norm(out['points'][p] - neutral[p]))
+                assert d < float(np.linalg.norm(out['points'][p] - moved[p]))
+                if prev[p] is not None and prev[p] > 1e-3:
+                    assert d < prev[p] - _TOL_1E_9
+                prev[p] = d
 
-    occ_conf = np.zeros(n, dtype=np.float32)
+
+def test_face_shield_neutral_first_frame():
+    shield = FaceShield()
+    base = np.array([[5.0, 7.0], [10.0, 3.0], [20.0, 9.0]], dtype=np.float32)
+    shield.transform_one(_frame(base, np.ones(3, dtype=np.float32), 0))
+    assert np.allclose(shield.neutral, base, atol=_TOL_1E_6)
+
+
+def test_face_shield_neutral_partial_occlusion():
+    shield = FaceShield()
+    base = np.array([[5.0, 7.0], [10.0, 3.0], [20.0, 9.0]], dtype=np.float32)
+    conf = np.ones(3, dtype=np.float32)
+    conf[0] = 0.0
+    out = shield.transform_one(_frame(base, conf, 0))
+    assert np.isnan(shield.neutral[0]).all()
+    assert np.allclose(shield.neutral[1:], base[1:], atol=_TOL_1E_6)
+    assert np.allclose(out['points'][0], base[0])
+    shield.transform_one(_frame(base, np.ones(3, dtype=np.float32), 1))
+    assert np.allclose(shield.neutral[0], base[0], atol=_TOL_1E_6)
+
+
+def test_face_shield_point_occluded_before_first_measurement():
+    shield = FaceShield()
+    pts = np.array([[50.0, 60.0], [10.0, 3.0]], dtype=np.float32)
+    out = shield.transform_one(_frame(pts, np.array([0.0, 1.0], dtype=np.float32), 0))
+    assert np.allclose(out['points'][0], [50.0, 60.0])
+
+
+def test_face_shield_clone_with_neutral_then_long_gap():
+    neutral = np.zeros((3, 2))
+    shield = FaceShield(neutral=neutral, max_gap=2).clone()
+    pts = np.array([[5.0, 7.0], [10.0, 3.0], [20.0, 9.0]], dtype=np.float32)
+    for i in range(5):
+        shield.transform_one(_frame(pts, np.ones(3, dtype=np.float32), i))
+    for i in range(6):
+        shield.transform_one(_frame(pts, np.zeros(3, dtype=np.float32), 5 + i))
+
+
+def test_face_shield_hampel_history_reset_after_gap():
+    shield = FaceShield(window=7, n_sigmas=3.0, max_gap=20)
+    at = np.array([[10.0, 10.0]], dtype=np.float32)
+    far = np.array([[40.0, 10.0]], dtype=np.float32)
     for i in range(10):
-        out = shield.transform_one(
-            {
-                'points': moved,
-                'confidence': occ_conf,
-                't': float(15 + i) / 30.0,
-            }
-        )
-        if i > _MAX_GAP_DECAY_START:
-            for p in range(n):
-                dist_to_neutral = np.linalg.norm(out['points'][p] - neutral[p])
-                dist_to_moved = np.linalg.norm(out['points'][p] - moved[p])
-                assert dist_to_neutral < dist_to_moved, (
-                    f'Point {p} not decaying to neutral at frame {i}'
-                )
+        shield.transform_one(_frame(at, np.ones(1, dtype=np.float32), i))
+    for i in range(10):
+        shield.transform_one(_frame(at, np.zeros(1, dtype=np.float32), 10 + i))
+    out = shield.transform_one(_frame(far, np.ones(1, dtype=np.float32), 20))
+    assert out['cleaned'][0] == 0
 
 
 def test_check_estimator_face_shield():
-    """check_estimator(FaceShield()) passes with empty skip list."""
     shield = FaceShield()
     result = check_estimator(shield)
-    assert result['failed'] == [], f'Failed checks: {result["failed"]}'
-    assert result['not_applicable'] == [], f'Not applicable: {result["not_applicable"]}'
-    assert hasattr(shield, '_unit_test_skips')
+    assert result['failed'] == [], result['failed']
+    assert result['not_applicable'] == [], result['not_applicable']
     assert shield._unit_test_skips() == set()
+
+
+def test_flat_dict_is_read_as_points():
+    shield = FaceShield()
+    out = shield.transform_one({'a': 1.0, 'b': 2.0, 'c': 3.0})
+    assert out['points'].shape == (3, 2)
+    assert np.allclose(out['points'][:, 0], [1.0, 2.0, 3.0])
