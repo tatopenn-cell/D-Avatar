@@ -42,7 +42,7 @@ def test_frames_yield_non_decreasing_timestamps_near_zero():
     assert len(frames) == 5
     ts = [t for t, _ in frames]
     assert abs(ts[0]) < 1e-6  # first timestamp starts near 0
-    assert all(b >= a for a, b in zip(ts, ts[1:]))  # non-decreasing
+    assert all(b >= a for a, b in zip(ts, ts[1:], strict=False))  # non-decreasing
 
 
 def test_frames_stop_on_failing_read():

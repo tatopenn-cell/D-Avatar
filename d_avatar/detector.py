@@ -75,8 +75,8 @@ class FaceDetector:
 
         ``mediapipe`` is imported only here.
         """
-        from mediapipe.tasks.python.core import BaseOptions  # type: ignore[import-untyped]  # noqa: PLC0415
-        from mediapipe.tasks.python.vision import (  # type: ignore[import-untyped]  # noqa: PLC0415
+        from mediapipe.tasks.python.core import BaseOptions  # type: ignore[import-untyped]  # noqa: PLC0415,I001
+        from mediapipe.tasks.python.vision import (  # type: ignore[import-untyped]  # noqa: PLC0415,I001
             FaceLandmarker,  # noqa: PLC0415
             FaceLandmarkerOptions,  # noqa: PLC0415
         )  # noqa: PLC0415
