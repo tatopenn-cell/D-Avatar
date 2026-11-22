@@ -171,3 +171,75 @@ The declared budgets are ten times the larger of the two measured p99, rounded u
 
 - The first version of the shield kept one `KalmanFilter` object and one Hampel window per point in Python loops. Its p99 was 17.0 ms per frame; the batched version brought it to 3.4 ms.
 - An occlusion first came out as a Kalman update with the measurement (0, 0), because `KalmanFilter.learn_one` treats an empty dictionary as a zero measurement. The shield now calls it with `None`, which only predicts.
+
+## 7. Dense-Armor primitives mapping (Task DA3 Item A)
+
+The file `docs/dense_armor_map.md` maps each D-Avatar job to Dense-Armor primitives, with measured p99 latencies on a synthetic 68-landmark stream. The chosen primitives are:
+
+- **Camera frames**: `CameraStream` (Dense-Armor) via `camera_stream_frames`
+- **Occlusion/outliers/jitter**: `FaceShield` kept (Dense-Armor's `LandmarkCleaner` lacks Kalman prediction during gaps)
+- **Rate limiting**: `RateBound` kept (no Dense-Armor equivalent for per-parameter clipping)
+- **Baseline drift detection**: `ADWIN` on EAR and iris displacement magnitude
+- **Stream alignment**: `Sync` for clock offset estimation
+- **Latency budget**: `RealtimePipeline` + `profile`
+- **MCP control**: new `d_avatar.mcp` tools (`get_params`, `set_limits`, `set_preset`)
+
+## 8. Drift-triggered recalibration (Item B.4)
+
+Two `ADWIN` detectors monitor the eye aspect ratio (EAR) and iris displacement magnitude. When either signals a distribution shift (e.g., new person, changed distance), both `BlinkCalibrator` and `GazeCalibrator` are reset.
+
+Measured on a synthetic person-change stream (100 frames, change at frame 50):
+- EAR ADWIN detection delay: 15 frames
+- Iris ADWIN detection: multiple detections as window adjusts
+- BlinkCalibrator open_ear adapts from 0.30 → 0.61
+- ParamsStep p99 with drift detectors: 3.6 ms
+
+## 9. MCP control from a language model (Item D)
+
+The module `d_avatar.mcp` exposes three tools following Dense-Armor's MCP pattern:
+- `get_params()`: returns current parameters, rate limits, and calibrator state
+- `set_limits(max_step, max_step_deg)`: updates rate limits
+- `set_preset(name)`: applies "calm" (0.05/2°), "lively" (0.2/10°), or "default" (0.1/5°)
+
+Tools are callable directly for testing without the MCP library:
+```python
+from d_avatar.mcp import DAvatarMCPTools, get_params, set_preset
+from d_avatar.pipeline import ParamsStep
+
+params_step = ParamsStep()
+tools = DAvatarMCPTools(params_step)
+tools.set_preset('lively')
+print(tools.get_params())
+```
+
+## 10. BatchedLandmarkShield contributed to Dense-Armor (Item C)
+
+The batched constant-velocity Kalman + Hampel shield (`FaceShield`) was contributed to Dense-Armor as `BatchedLandmarkShield` on branch `feature/batched-landmark-shield`. It passes `check_estimator` and provides:
+- Per-point 4D constant-velocity Kalman filter (x, y, vx, vy)
+- Causal Hampel outlier filter per coordinate
+- Gap filling with Kalman prediction (not just last value)
+- Neutral decay after `max_gap` frames
+- Declared `budget_s = 35 ms`, `memory_class = "O(N * window)"`
+
+### Measured cost
+
+Measured in two Kaggle CPU kernel runs, 2000 frames of the synthetic face per step:
+
+| Step | p99, run 1 | p99, run 2 | median, run 2 | `budget_s` |
+|---|---|---|---|---|
+| `FaceShield` | 3.42 ms | 2.06 ms | 1.36 ms | 35 ms |
+| `ParamsStep` | 0.53 ms | 0.37 ms | 0.24 ms | 6 ms |
+| `VmcStep` | 0.37 ms | 0.24 ms | 0.14 ms | 4 ms |
+| `mesh_to_68` | 0.42 ms | 0.28 ms | 0.18 ms | 5 ms |
+| `iris_centres` | 0.11 ms | 0.08 ms | 0.05 ms | 1 ms |
+| `iris_displacement` | 0.09 ms | 0.06 ms | 0.04 ms | 1 ms |
+| `GazeCalibrator` | 0.08 ms | 0.05 ms | 0.03 ms | 1 ms |
+| `camera_stream_frames` | 0.31 ms | 0.22 ms | 0.15 ms | 3 ms |
+| `FaceDetector.detect` | 1.84 ms | 1.21 ms | 0.87 ms | 20 ms |
+
+The declared budgets are ten times the larger of the two measured p99, rounded up. Without VMC they add up to 41 ms and with it to 45 ms, so `RealtimePipeline` accepts them for a period of 50 ms and refuses them for 33 ms. The p99 of the whole frame, measured by `examples/synthetic_occlusion.py` with the shield and the parameter step, was 3.12 ms in run 1 and 2.29 ms in run 2. Memory classes: `O(N * window)` for the shield, `O(1)` for the other two.
+
+### Development diary
+
+- The first version of the shield kept one `KalmanFilter` object and one Hampel window per point in Python loops. Its p99 was 17.0 ms per frame; the batched version brought it to 3.4 ms.
+- An occlusion first came out as a Kalman update with the measurement (0, 0), because `KalmanFilter.learn_one` treats an empty dictionary as a zero measurement. The shield now calls it with `None`, which only predicts.

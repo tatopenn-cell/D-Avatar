@@ -13,7 +13,7 @@ import time
 from typing import Any
 
 import numpy as np
-from dense_armor.core.online.drift.adwin import ADWIN
+from dense_armor.core.online.drift.adwin import ADWIN  # type: ignore[import-untyped]
 from dense_armor.core.signals.vision.landmarks import LandmarkStream  # type: ignore[import-untyped]
 from dense_armor.roles import RealtimePipeline, Transformer  # type: ignore[import-untyped]
 
@@ -85,7 +85,7 @@ class ParamsStep(Transformer):
         self._gaze_ema.clear()
         self._drift_detected = True
 
-    def transform_one(self, x: dict, t: float | None = None) -> dict:
+    def transform_one(self, x: dict, t: float | None = None) -> dict[str, Any]:
         pts = np.asarray(x['points'], dtype=float)
         ear_l, ear_r = eye_aspect_ratios(pts)
         ear = (ear_l + ear_r) / 2.0
@@ -96,7 +96,7 @@ class ParamsStep(Transformer):
             self._reset_calibrators()
 
         self.calibrator.update(ear)
-        params = landmarks_to_params(pts, ear_open=self.calibrator.open_ear())
+        params: dict[str, float] = landmarks_to_params(pts, ear_open=self.calibrator.open_ear())
         for k in _UNIT_KEYS:
             smooth = ema(self._ema.get(k, params[k]), params[k], _EMA_ALPHA)
             self._ema[k] = smooth

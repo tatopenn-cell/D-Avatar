@@ -8,6 +8,7 @@ theme:
 
 nav:
   - Home: index.md
+  - Dense-Armor map: dense_armor_map.md
 
 plugins:
   - search

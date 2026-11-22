@@ -6,6 +6,13 @@ A face tracker gives you 68 landmarks per video frame. D-Avatar cleans them (a l
 
 The parameters are `eye_l`, `eye_r`, `mouth_open`, `brow_l` and `brow_r` in the range 0 to 1, `gaze_x` and `gaze_y` in the range -1 to 1, `head_yaw`, `head_pitch` and `head_roll` in degrees, and `blink` (0 or 1). Gaze is computed only when the frame carries the iris centres.
 
+**Task DA3 (Dense-Armor integration)**: D-Avatar is now built from Dense-Armor primitives:
+- Camera input via `dense_armor.core.signals.vision.CameraStream`
+- Drift detection via `dense_armor.core.online.drift.ADWIN` on EAR and iris displacement
+- Latency budget via `dense_armor.roles.RealtimePipeline`
+- MCP control via new `d_avatar.mcp` tools (`get_params`, `set_limits`, `set_preset`)
+- The batched landmark shield (`FaceShield`) was contributed to Dense-Armor as `BatchedLandmarkShield` (branch `feature/batched-landmark-shield`)
+
 ## Install
 
 Python 3.10 or newer. The core needs `dense_armor` and `numpy`; the extras add what each part uses.
