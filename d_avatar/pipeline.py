@@ -112,6 +112,10 @@ class VmcStep(Transformer):
         self._vmc.send(x)
         return x
 
+    def close(self) -> None:
+        """Close the UDP socket of the sender."""
+        self._vmc.close()
+
     def learn_one(self, x: dict, y: Any = None, t: float | None = None) -> VmcStep:
         self.transform_one(x, t)
         return self
