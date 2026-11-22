@@ -22,7 +22,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from d_avatar import AvatarPipeline, FaceDetector
+from d_avatar import AvatarPipeline, FaceDetector, camera_stream_frames
 
 MODEL_URL = (
     'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/'
@@ -88,12 +88,8 @@ class App:
                 self.say('Scarico il modello (3,7 MB), una volta sola...')
                 urllib.request.urlretrieve(MODEL_URL, MODEL)
             index = int(self.index.get())
-            cap = cv2.VideoCapture(index)
-            if not cap.isOpened():
-                cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
-            if not cap.isOpened():
-                raise RuntimeError(f'camera {index} non disponibile')
-            self.cap = cap
+            # Use Dense-Armor's CameraStream via camera_stream_frames
+            self._cam_gen = camera_stream_frames(device=index, fps=30.0, gray=False)
             self.det = FaceDetector.open_default(str(MODEL))
             self.ap = AvatarPipeline(vmc_host=self.host.get(), vmc_port=int(self.port.get()))
         except Exception as e:
@@ -108,16 +104,23 @@ class App:
         self.tick()
 
     def tick(self) -> None:
-        if not self.running or self.cap is None or self.det is None or self.ap is None:
+        if not self.running or self.det is None or self.ap is None:
             return
-        ok, bgr = self.cap.read()
-        if not ok:
-            self.say('Nessuna immagine dalla camera')
+        try:
+            t, rgb = next(self._cam_gen)
+        except StopIteration:
+            self.say('Camera stream ended')
+            self.stop()
+            return
+        except Exception as e:
+            self.say(f'Camera error: {e}')
             self.root.after(50, self.tick)
             return
-        frame = self.det.detect(
-            np.ascontiguousarray(bgr[:, :, ::-1]), time.perf_counter() - self.t0
-        )
+
+        # camera_stream_frames yields RGB float32 in [0, 1]; convert to BGR uint8 for display
+        bgr = cv2.cvtColor((rgb * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
+
+        frame = self.det.detect(np.ascontiguousarray(rgb), t)
         params = self.ap.step(frame)
         face = bool(frame['confidence'].any())
         self.frames += 1
@@ -134,9 +137,7 @@ class App:
 
     def stop(self) -> None:
         self.running = False
-        if self.cap is not None:
-            self.cap.release()
-            self.cap = None
+        # camera_stream_frames handles camera release internally
         if self.ap is not None and self.ap.vmc is not None:
             self.ap.vmc.close()
         self.ap = None
