@@ -13,6 +13,7 @@ import time
 from typing import Any
 
 import numpy as np
+from dense_armor.core.online.drift.adwin import ADWIN
 from dense_armor.core.signals.vision.landmarks import LandmarkStream  # type: ignore[import-untyped]
 from dense_armor.roles import RealtimePipeline, Transformer  # type: ignore[import-untyped]
 
@@ -35,22 +36,35 @@ _EMA_ALPHA = 0.3
 
 class ParamsStep(Transformer):
     """Landmarks to parameters: calibrated eye opening, EMA on [0, 1] values,
-    rate bounds, and gaze from the iris.
+    rate bounds, gaze from the iris, and drift-triggered recalibration.
 
     When a frame carries ``iris``, ``gaze_x`` and ``gaze_y`` are computed with
     :class:`d_avatar.gaze.GazeCalibrator`, smoothed like the other [0, 1]
     values and limited with the same ``max_step``. Frames without ``iris``
     return the parameters unchanged (no gaze keys).
 
+    Drift detection: two ADWIN detectors monitor the eye aspect ratio (EAR)
+    and the iris displacement magnitude. When either signals a drift
+    (baseline shift, e.g. new person or changed distance), both
+    ``BlinkCalibrator`` and ``GazeCalibrator`` are reset.
+
     Args:
         max_step: maximum change per frame of the [0, 1] parameters.
         max_step_deg: maximum change per frame of the head angles, in degrees.
+        drift_delta: ADWIN confidence parameter (default 0.002).
+        drift_max_window: ADWIN maximum window size (default 100).
     """
 
     budget_s: float | None = 6e-3
     memory_class: str = 'O(1)'
 
-    def __init__(self, max_step: float = 0.1, max_step_deg: float = 5.0) -> None:
+    def __init__(
+        self,
+        max_step: float = 0.1,
+        max_step_deg: float = 5.0,
+        drift_delta: float = 0.002,
+        drift_max_window: int = 100,
+    ) -> None:
         self.max_step = float(max_step)
         self.max_step_deg = float(max_step_deg)
         self.bound = RateBound(self.max_step, dict.fromkeys(_HEAD_KEYS, self.max_step_deg))
@@ -58,11 +72,29 @@ class ParamsStep(Transformer):
         self.gaze_calibrator = GazeCalibrator()
         self._ema: dict[str, float] = {}
         self._gaze_ema: dict[str, float] = {}
+        # ADWIN drift detectors for EAR and iris displacement magnitude
+        self._ear_drift = ADWIN(delta=drift_delta, max_window=drift_max_window)
+        self._iris_drift = ADWIN(delta=drift_delta, max_window=drift_max_window)
+        self._drift_detected = False
+
+    def _reset_calibrators(self) -> None:
+        """Reset both calibrators when drift is detected."""
+        self.calibrator = BlinkCalibrator()
+        self.gaze_calibrator = GazeCalibrator()
+        self._ema.clear()
+        self._gaze_ema.clear()
+        self._drift_detected = True
 
     def transform_one(self, x: dict, t: float | None = None) -> dict:
         pts = np.asarray(x['points'], dtype=float)
         ear_l, ear_r = eye_aspect_ratios(pts)
         ear = (ear_l + ear_r) / 2.0
+
+        # Update EAR drift detector
+        self._ear_drift.update(ear)
+        if self._ear_drift.drift_detected:
+            self._reset_calibrators()
+
         self.calibrator.update(ear)
         params = landmarks_to_params(pts, ear_open=self.calibrator.open_ear())
         for k in _UNIT_KEYS:
@@ -72,6 +104,7 @@ class ParamsStep(Transformer):
         for k in _HEAD_KEYS:
             params[k] = self.bound.step(k, params[k])
         params['blink'] = 1.0 if self.calibrator.is_blink(ear) else 0.0
+
         if 'iris' in x and x['iris'] is not None:
             iris = np.asarray(x['iris'], dtype=float)
             dxs: list[float] = []
@@ -84,12 +117,21 @@ class ParamsStep(Transformer):
                 dys.append(dy)
             dx = float(np.mean(dxs))
             dy = float(np.mean(dys))
+            iris_mag = float(np.hypot(dx, dy))
+
+            # Update iris displacement drift detector
+            self._iris_drift.update(iris_mag)
+            if self._iris_drift.drift_detected:
+                self._reset_calibrators()
+
             self.gaze_calibrator.update(dx, dy)
             gx, gy = self.gaze_calibrator.gaze(dx, dy)
             for name, g in (('gaze_x', gx), ('gaze_y', gy)):
                 smooth = ema(self._gaze_ema.get(name, g), g, _EMA_ALPHA)
                 self._gaze_ema[name] = smooth
                 params[name] = self.bound.step(name, smooth)
+        else:
+            self._drift_detected = False
         return params
 
     def learn_one(self, x: dict, y: Any = None, t: float | None = None) -> ParamsStep:
@@ -146,6 +188,8 @@ class AvatarPipeline:
         shield_window: FaceShield Hampel window.
         shield_n_sigmas: FaceShield Hampel threshold.
         shield_max_gap: FaceShield max predict-only frames.
+        drift_delta: ADWIN confidence parameter (default 0.002).
+        drift_max_window: ADWIN maximum window size (default 100).
         vmc_host: VMC destination host; None sends nothing and needs no python-osc.
         vmc_port: VMC destination port.
         use_shield: False replaces the shield with a pass-through.
@@ -163,6 +207,8 @@ class AvatarPipeline:
         shield_window: int = 7,
         shield_n_sigmas: float = 3.0,
         shield_max_gap: int = 5,
+        drift_delta: float = 0.002,
+        drift_max_window: int = 100,
         vmc_host: str | None = None,
         vmc_port: int = 39539,
         use_shield: bool = True,
@@ -172,7 +218,7 @@ class AvatarPipeline:
             if use_shield
             else PassThrough()
         )
-        self.params_step = ParamsStep(max_step, max_step_deg)
+        self.params_step = ParamsStep(max_step, max_step_deg, drift_delta, drift_max_window)
         self.vmc = VmcStep(vmc_host, vmc_port) if vmc_host is not None else None
         steps: list[Any] = [self.shield, self.params_step]
         if self.vmc is not None:
