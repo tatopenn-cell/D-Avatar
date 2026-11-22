@@ -171,8 +171,10 @@ def test_iris_centres():
     mesh = _synthetic_mesh_478()
     c = iris_centres(mesh)
     assert c.shape == (2, 2)
-    # Left iris (image-left eye) at x < right iris (image-right eye).
-    assert c[0, 0] < c[1, 0]
+    # Returns [left_iris, right_iris] in iBUG order:
+    # left_iris = person's LEFT eye (iBUG 36-41) at higher x in non-mirrored image
+    # right_iris = person's RIGHT eye (iBUG 42-47) at lower x
+    assert c[0, 0] > c[1, 0]
     # 468-point mesh has no iris vertices -> zero centres.
     mesh468 = np.zeros((468, 2), dtype=float)
     assert np.allclose(iris_centres(mesh468), 0.0)
@@ -184,6 +186,7 @@ def test_iris_mapping_consistent_with_contours():
     # Image-left eye at x~30 uses LEFT_EYE contour and LEFT_IRIS (474-477)
     # Image-right eye at x~70 uses RIGHT_EYE contour and RIGHT_IRIS (469-472)
     c = iris_centres(mesh)
-    # Both centres should be on their respective eye contours
-    assert abs(c[0, 0] - 30.0) < 1.0  # left iris near x=30
-    assert abs(c[1, 0] - 70.0) < 1.0  # right iris near x=70
+    # c[0] = left_iris = person's LEFT eye (iBUG 36-41) at x~70
+    # c[1] = right_iris = person's RIGHT eye (iBUG 42-47) at x~30
+    assert abs(c[0, 0] - 70.0) < 1.0  # left iris near x=70
+    assert abs(c[1, 0] - 30.0) < 1.0  # right iris near x=30

@@ -94,24 +94,18 @@ class FaceDetector:
         Args:
             model_path: path to the face_landmarker.task model file.
         """
-        from mediapipe.tasks.python import BaseOptions  # type: ignore[import-untyped]  # noqa: I001,PLC0415
-        from mediapipe.tasks.python.vision import (  # type: ignore[import-untyped]  # noqa: I001,PLC0415
-            FaceLandmarker,
-            FaceLandmarkerOptions,
-        )
-        from mediapipe.tasks.python.vision.core.vision_task_running_mode import (  # type: ignore[import-untyped]  # noqa: PLC0415
-            VisionTaskRunningMode,
-        )
         import os  # noqa: PLC0415  # intentional lazy import
 
-        if not os.path.exists(model_path):
-            # Try to find it in mediapipe package
-            import mediapipe as mp  # noqa: PLC0415  # intentional lazy import
-
-            mp_root = os.path.dirname(mp.__file__)
-            candidate = os.path.join(mp_root, 'modules', 'face_landmarker', 'face_landmarker.task')
-            if os.path.exists(candidate):
-                model_path = candidate
+        from mediapipe.tasks.python import (  # type: ignore[import-untyped]  # noqa: I001,PLC0415
+            BaseOptions,  # noqa: I001
+        )
+        from mediapipe.tasks.python.vision import (  # type: ignore[import-untyped]  # noqa: I001,PLC0415
+            FaceLandmarker,  # noqa: I001
+            FaceLandmarkerOptions,  # noqa: I001
+        )
+        from mediapipe.tasks.python.vision.core.vision_task_running_mode import (  # type: ignore[import-untyped]  # noqa: PLC0415
+            VisionTaskRunningMode,  # noqa: I001
+        )
 
         if not os.path.exists(model_path):
             raise FileNotFoundError(

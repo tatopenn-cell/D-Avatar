@@ -484,9 +484,13 @@ def iris_centres(mesh: np.ndarray) -> np.ndarray:
     left_pts = xy[list(FACEMESH_LEFT_EYE)]
     right_pts = xy[list(FACEMESH_RIGHT_EYE)]
     if float(left_pts[:, 0].mean()) <= float(right_pts[:, 0].mean()):
-        first_iris, second_iris = FACEMESH_LEFT_IRIS, FACEMESH_RIGHT_IRIS
-    else:
+        # LEFT_EYE contour at lower x = normal image
+        # person's RIGHT eye -> LEFT_IRIS (iBUG RIGHT)
+        # person's LEFT eye -> RIGHT_IRIS (iBUG LEFT)
         first_iris, second_iris = FACEMESH_RIGHT_IRIS, FACEMESH_LEFT_IRIS
+    else:
+        # Mirrored: RIGHT_EYE at lower x = person's RIGHT eye
+        first_iris, second_iris = FACEMESH_LEFT_IRIS, FACEMESH_RIGHT_IRIS
 
     def centre(iris_edges: frozenset[tuple[int, int]]) -> np.ndarray:
         idx = np.array(sorted({i for e in iris_edges for i in e}), dtype=int)
