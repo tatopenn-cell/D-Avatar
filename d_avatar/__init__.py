@@ -7,6 +7,7 @@ An application on top of `dense_armor`.
 from d_avatar.capture import CameraSource, camera_stream_frames
 from d_avatar.detector import FaceDetector
 from d_avatar.gaze import GazeCalibrator, iris_displacement
+from d_avatar.mcp import DAvatarMCPTools, get_params, set_limits, set_preset, list_presets
 from d_avatar.mesh import iris_centres, mesh_to_68
 from d_avatar.params import BlinkCalibrator, RateBound, ema, landmarks_to_params
 from d_avatar.pipeline import AvatarPipeline, build_pipeline, run
@@ -19,6 +20,7 @@ __all__ = [
     'AvatarPipeline',
     'BlinkCalibrator',
     'CameraSource',
+    'DAvatarMCPTools',
     'FaceDetector',
     'FaceShield',
     'GazeCalibrator',
@@ -27,9 +29,13 @@ __all__ = [
     'build_pipeline',
     'camera_stream_frames',
     'ema',
+    'get_params',
     'iris_centres',
     'iris_displacement',
     'landmarks_to_params',
+    'list_presets',
     'mesh_to_68',
     'run',
+    'set_limits',
+    'set_preset',
 ]
