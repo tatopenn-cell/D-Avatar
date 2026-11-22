@@ -9,6 +9,7 @@ import inspect
 import numpy as np
 from dense_armor.core.signals.vision.streams import Frame
 
+import d_avatar.capture as capture_module
 from d_avatar.capture import camera_stream_frames
 
 
@@ -62,8 +63,6 @@ def test_camera_stream_frames_with_fake_stream():
     frames = [np.full((4, 4, 3), float(i), dtype=np.float32) / 255.0 for i in range(5)]
 
     # Monkey-patch CameraStream to use our fake stream
-    import d_avatar.capture as capture_module
-
     original_camera_stream = capture_module.CameraStream
     capture_module.CameraStream = lambda *args, **kwargs: _PatchedCameraStream(frames, fps=30.0)
 
@@ -81,8 +80,6 @@ def test_camera_stream_frames_with_fake_stream():
 def test_camera_stream_frames_yields_rgb_float32():
     """Test that camera_stream_frames yields RGB float32 frames in [0, 1]."""
     frames = [np.full((4, 4, 3), float(i), dtype=np.float32) / 255.0 for i in range(3)]
-
-    import d_avatar.capture as capture_module
 
     original_camera_stream = capture_module.CameraStream
     capture_module.CameraStream = lambda *args, **kwargs: _PatchedCameraStream(frames, fps=30.0)
