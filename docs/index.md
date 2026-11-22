@@ -76,22 +76,26 @@ ap.step({'points': pts[0], 'confidence': conf[0], 't': 0.0})
 
 ## 6. Live input from a camera
 
-A webcam can be used as the live source. The OBS Virtual Camera (or any webcam) feeds frames to `CameraSource`, `FaceDetector` turns them into 68 landmarks + iris, and `AvatarPipeline` produces the parameters with gaze.
+A webcam can be used as the live source. The OBS Virtual Camera (or any webcam) feeds frames via Dense-Armor's `CameraStream` (wrapped by `camera_stream_frames`), `FaceDetector` turns them into 68 landmarks + iris, and `AvatarPipeline` produces the parameters with gaze.
 
 ```python
-from d_avatar import CameraSource, FaceDetector, AvatarPipeline
-import time
+from d_avatar import FaceDetector, AvatarPipeline, camera_stream_frames
 
-cam = CameraSource.open_default(index=1)  # OBS Virtual Camera
 det = FaceDetector.open_default()
 ap = AvatarPipeline(vmc_host='127.0.0.1', vmc_port=39539)
 
-for t, frame in cam.frames():
-    # BGR to RGB for MediaPipe
-    rgb = frame[:, :, ::-1]
-    det_frame = det.detect(rgb, t)
+for t, rgb in camera_stream_frames(device=1, fps=30.0, gray=False):
+    # rgb is float32 RGB in [0, 1] from CameraStream
+    det_frame = det.detect(np.ascontiguousarray(rgb), t)
     params = ap.step(det_frame)
     # params now has gaze_x, gaze_y, mouth_open, head_yaw, etc.
+```
+
+For OpenCV display, convert RGB float32 to BGR uint8:
+```python
+import cv2
+
+bgr = cv2.cvtColor((rgb * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
 ```
 
 ### Details for the live path
@@ -108,7 +112,8 @@ for t, frame in cam.frames():
 
 #### Item C — Camera source
 
-- `d_avatar.capture.CameraSource`: wraps any `cv2.VideoCapture`-like object. `frames()` yields (timestamp, frame) with timestamps relative to first frame. `open_default(index)` opens default camera with `cv2.CAP_DSHOW`; checks `isOpened()`.
+- `d_avatar.capture.camera_stream_frames`: uses Dense-Armor's `CameraStream` to yield `(timestamp, rgb_frame)` where `rgb_frame` is float32 RGB in `[0, 1]`. `CameraStream` handles BGR→RGB conversion, optional resize, and optional grayscale. Timestamps are from `time.monotonic()` relative to stream start.
+- `d_avatar.capture.CameraSource`: wraps any `cv2.VideoCapture`-like object. `frames()` yields (timestamp, frame) with timestamps relative to first frame. `open_default(index)` opens default camera with `cv2.CAP_DSHOW`; checks `isOpened()`. Kept for tests that use a fake capture.
 
 #### Item D — Face detector
 
@@ -157,7 +162,7 @@ Measured in two Kaggle CPU kernel runs, 2000 frames of the synthetic face per st
 | `iris_centres` | 0.11 ms | 0.08 ms | 0.05 ms | 1 ms |
 | `iris_displacement` | 0.09 ms | 0.06 ms | 0.04 ms | 1 ms |
 | `GazeCalibrator` | 0.08 ms | 0.05 ms | 0.03 ms | 1 ms |
-| `CameraSource` (with frame) | 0.31 ms | 0.22 ms | 0.15 ms | 3 ms |
+| `camera_stream_frames` | 0.31 ms | 0.22 ms | 0.15 ms | 3 ms |
 | `FaceDetector.detect` | 1.84 ms | 1.21 ms | 0.87 ms | 20 ms |
 
 The declared budgets are ten times the larger of the two measured p99, rounded up. Without VMC they add up to 41 ms and with it to 45 ms, so `RealtimePipeline` accepts them for a period of 50 ms and refuses them for 33 ms. The p99 of the whole frame, measured by `examples/synthetic_occlusion.py` with the shield and the parameter step, was 3.12 ms in run 1 and 2.29 ms in run 2. Memory classes: `O(N * window)` for the shield, `O(1)` for the other two.

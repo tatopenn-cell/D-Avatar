@@ -1,10 +1,11 @@
 """
-Live webcam example.
+Live webcam example using Dense-Armor's CameraStream.
 
-Reads a camera, finds the face with MediaPipe, runs the D-Avatar pipeline and sends the
-parameters over VMC. A window shows the camera image with the detected landmarks and the
-main parameters; press q or Esc in the window to quit. Needs the cam, mp and osc extras
-and the MediaPipe model file face_landmarker.task.
+Reads a camera via dense_armor.core.signals.vision.CameraStream, finds the face with
+MediaPipe, runs the D-Avatar pipeline and sends the parameters over VMC. A window shows
+the camera image with the detected landmarks and the main parameters; press q or Esc in
+the window to quit. Needs the cam, mp and osc extras and the MediaPipe model file
+face_landmarker.task.
 
     python examples/webcam.py --index 0 --host 127.0.0.1 --port 39539
     python examples/webcam.py --no-preview --frames 300
@@ -18,7 +19,7 @@ import sys
 import cv2
 import numpy as np
 
-from d_avatar import AvatarPipeline, CameraSource, FaceDetector
+from d_avatar import AvatarPipeline, FaceDetector, camera_stream_frames
 
 SHOWN = ('eye_l', 'eye_r', 'mouth_open', 'brow_l', 'head_yaw', 'head_pitch', 'head_roll')
 STATUS_EVERY = 30
@@ -44,32 +45,26 @@ def main() -> int:
     parser.add_argument('--host', default='127.0.0.1', help='VMC destination host')
     parser.add_argument('--port', type=int, default=39539, help='VMC destination port')
     parser.add_argument('--index', type=int, default=0, help='camera index')
-    parser.add_argument('--dshow', action='store_true', help='open the camera with DirectShow')
     parser.add_argument('--model', default='face_landmarker.task', help='MediaPipe model file')
     parser.add_argument('--no-preview', action='store_true', help='do not open a window')
     parser.add_argument('--frames', type=int, default=0, help='stop after this many frames')
     args = parser.parse_args()
 
-    cap = (
-        cv2.VideoCapture(args.index, cv2.CAP_DSHOW) if args.dshow else cv2.VideoCapture(args.index)
-    )
-    if not cap.isOpened():
-        print(f'Cannot open camera {args.index}', file=sys.stderr)
-        return 1
-    cam = CameraSource(cap)
     try:
         det = FaceDetector.open_default(args.model)
     except Exception as e:
         print(f'Cannot open the detector: {e}', file=sys.stderr)
-        cam.close()
         return 1
     ap = AvatarPipeline(vmc_host=args.host, vmc_port=args.port)
 
     print(f'Sending VMC to {args.host}:{args.port}. Press q in the window, or Ctrl+C, to quit.')
     n = 0
     try:
-        for t, bgr in cam.frames():
-            frame = det.detect(np.ascontiguousarray(bgr[:, :, ::-1]), t)
+        for t, rgb in camera_stream_frames(device=args.index, fps=30.0, gray=False):
+            # CameraStream yields RGB float32 in [0, 1]; convert to BGR uint8 for display
+            bgr = cv2.cvtColor((rgb * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
+            # FaceDetector expects RGB; rgb is already RGB float32
+            frame = det.detect(np.ascontiguousarray(rgb), t)
             params = ap.step(frame)
             face = bool(frame['confidence'].any())
             n += 1
@@ -87,7 +82,6 @@ def main() -> int:
     except KeyboardInterrupt:
         pass
     finally:
-        cam.close()
         cv2.destroyAllWindows()
     return 0
 
