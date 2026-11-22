@@ -1,0 +1,59 @@
+"""Tests for capture.py (item C): a camera source yielding (t, image) frames.
+
+Runs without opencv-python installed: cv2 is imported only inside
+CameraSource.open_default.
+"""
+
+import numpy as np
+
+from d_avatar.capture import CameraSource
+
+
+class _FakeCap:
+    """A capture that yields `n` frames then reports a failed read."""
+
+    def __init__(self, n: int = 5) -> None:
+        self.n = int(n)
+        self.i = 0
+        self.released = False
+
+    def read(self):
+        if self.i >= self.n:
+            return False, None
+        frame = np.full((4, 4, 3), float(self.i), dtype=np.uint8)
+        self.i += 1
+        return True, frame
+
+    def release(self) -> None:
+        self.released = True
+
+
+def test_frames_yield_non_decreasing_timestamps_near_zero():
+    now = [0.0]
+
+    def clock():
+        result = now[0]
+        now[0] += 0.033
+        return result
+
+    cap = _FakeCap(5)
+    src = CameraSource(cap, clock=clock)
+    frames = list(src.frames())
+    assert len(frames) == 5
+    ts = [t for t, _ in frames]
+    assert abs(ts[0]) < 1e-6  # first timestamp starts near 0
+    assert all(b >= a for a, b in zip(ts, ts[1:]))  # non-decreasing
+
+
+def test_frames_stop_on_failing_read():
+    cap = _FakeCap(3)
+    src = CameraSource(cap, clock=lambda: 0.0)
+    frames = list(src.frames())
+    assert len(frames) == 3
+
+
+def test_close_releases_capture():
+    cap = _FakeCap(5)
+    src = CameraSource(cap)
+    src.close()
+    assert cap.released is True
