@@ -12,7 +12,6 @@ import struct
 
 from d_avatar.vmc import VmcSender
 
-# Constants
 _EXPECTED_VAL_COUNT = 6
 _EXPECTED_APPLY_COUNT = 1
 _EXPECTED_TOTAL = _EXPECTED_VAL_COUNT + _EXPECTED_APPLY_COUNT
@@ -25,21 +24,14 @@ def _parse_osc_message(data: bytes) -> tuple[str, list]:
     """Simple OSC message parser for testing.
     Returns (address, args).
     """
-    # OSC message format:
-    # address pattern (null-terminated string)
-    # type tag string (null-terminated, starts with ',')
-    # arguments (4-byte aligned)
     idx = 0
-    # Parse address
     addr_end = data.find(b'\x00', idx)
     if addr_end == -1:
         return '', []
     address = data[idx:addr_end].decode('utf-8')
     idx = addr_end + 1
-    # Align to 4 bytes
     idx = (idx + 3) & ~3
 
-    # Parse type tag
     if idx >= len(data) or data[idx] != ord(','):
         return address, []
     tag_end = data.find(b'\x00', idx)
@@ -49,28 +41,26 @@ def _parse_osc_message(data: bytes) -> tuple[str, list]:
     idx = tag_end + 1
     idx = (idx + 3) & ~3
 
-    # Parse arguments
     args = []
     for tag in type_tags:
-        if tag == 's':  # string
+        if tag == 's':
             str_end = data.find(b'\x00', idx)
             if str_end == -1:
                 break
             args.append(data[idx:str_end].decode('utf-8'))
             idx = str_end + 1
             idx = (idx + 3) & ~3
-        elif tag == 'f':  # float32
+        elif tag == 'f':
             if idx + 4 <= len(data):
                 val = struct.unpack('>f', data[idx : idx + 4])[0]
                 args.append(val)
                 idx += 4
-        elif tag == 'i':  # int32
+        elif tag == 'i':
             if idx + 4 <= len(data):
                 val = struct.unpack('>i', data[idx : idx + 4])[0]
                 args.append(val)
                 idx += 4
         else:
-            # Skip unknown
             pass
     return address, args
 
@@ -85,7 +75,6 @@ def test_vmc_sender_import():
 
 def test_vmc_sender_send_one_frame():
     """Send one frame with 6 parameters -> 7 messages (6 Val + 1 Apply)."""
-    # Bind UDP socket on loopback port 0
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(('127.0.0.1', 0))
     port = sock.getsockname()[1]
@@ -104,7 +93,6 @@ def test_vmc_sender_send_one_frame():
 
     sender.send(params)
 
-    # Receive all messages (7 expected)
     messages = []
     for _ in range(_EXPECTED_TOTAL):
         try:
@@ -116,25 +104,21 @@ def test_vmc_sender_send_one_frame():
     sender.close()
     sock.close()
 
-    # Should have received 7 messages
     assert len(messages) == _EXPECTED_TOTAL, (
         f'Expected {_EXPECTED_TOTAL} messages, got {len(messages)}'
     )
 
-    # Parse and verify
     val_count = 0
     apply_count = 0
     for data in messages:
         address, args = _parse_osc_message(data)
         if address == '/VMC/Ext/Blend/Val':
             val_count += 1
-            # Verify arguments: name (string), value (float)
             assert len(args) == 2
             assert isinstance(args[0], str)
             assert isinstance(args[1], float)
         elif address == '/VMC/Ext/Blend/Apply':
             apply_count += 1
-            # Apply has no arguments
             assert len(args) == 0
 
     assert val_count == _EXPECTED_VAL_COUNT, (
@@ -157,7 +141,6 @@ def test_vmc_sender_context_manager():
     """VmcSender works as context manager."""
     with VmcSender() as sender:
         sender.send({'test': 1.0})
-    # Socket should be closed
 
 
 def test_vmc_sender_get_params():
@@ -167,3 +150,9 @@ def test_vmc_sender_get_params():
     assert params['host'] == '10.0.0.1'
     assert params['port'] == _OTHER_PORT
     sender.close()
+
+
+def test_vmc_sender_close_closes_socket():
+    sender = VmcSender()
+    sender.close()
+    assert sender._client._sock.fileno() == -1

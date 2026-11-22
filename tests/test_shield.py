@@ -2,7 +2,7 @@ import numpy as np
 from dense_armor.checks import check_estimator
 from dense_armor.core.online.timeseries.kalman import KalmanFilter
 
-from d_avatar.shield import FaceShield, _hampel_value
+from d_avatar.shield import FaceShield, _hampel_batch, _hampel_value
 
 _TOL_1E_9 = 1e-9
 _TOL_1E_6 = 1e-6
@@ -188,3 +188,39 @@ def test_flat_dict_is_read_as_points():
     out = shield.transform_one({'a': 1.0, 'b': 2.0, 'c': 3.0})
     assert out['points'].shape == (3, 2)
     assert np.allclose(out['points'][:, 0], [1.0, 2.0, 3.0])
+
+
+def test_hampel_batch_equals_scalar_rule():
+    rng = np.random.default_rng(1)
+    hist = rng.normal(0.0, 1.0, size=(40, 7))
+    hist[:5, :5] = np.nan
+    hist[5:10] = 2.0
+    vals = rng.normal(0.0, 4.0, size=40)
+    filt, flag = _hampel_batch(hist, vals, 3.0)
+    for i in range(40):
+        window = [v for v in hist[i] if not np.isnan(v)]
+        value, outlier = _hampel_value(window, float(vals[i]), 3.0)
+        assert abs(filt[i] - value) < _TOL_1E_6
+        assert bool(flag[i]) == outlier
+
+
+def test_face_shield_matches_dense_armor_kalman_filter():
+    dt = 1.0 / 30.0
+    f = np.array([[1, 0, dt, 0], [0, 1, 0, dt], [0, 0, 1, 0], [0, 0, 0, 1.0]])
+    h = np.array([[1.0, 0, 0, 0], [0, 1.0, 0, 0]])
+    q = np.diag([1e-6, 1e-6, 1e-4, 1e-4])
+    r = np.diag([1e-3, 1e-3])
+    rng = np.random.default_rng(2)
+    track = np.cumsum(rng.normal(0.5, 0.05, size=(60, 2)), axis=0)
+    shield = FaceShield(n_sigmas=1e9)
+    kf = KalmanFilter(
+        F=f, H=h, Q=q, R=r, x0=np.r_[track[0], 0.0, 0.0], P0=np.diag([1e-6, 1e-6, 1e-2, 1e-2])
+    )
+    kf.learn_one({'x': track[0, 0], 'y': track[0, 1]})
+    kf._x = np.r_[track[0], 0.0, 0.0]
+    kf._P = np.diag([1e-6, 1e-6, 1e-2, 1e-2])
+    for i, pt in enumerate(track):
+        out = shield.transform_one(_frame(pt[None, :], np.ones(1), i))['points'][0]
+        if i:
+            kf.learn_one({'x': pt[0], 'y': pt[1]})
+            assert np.abs(out - kf._x[:2]).max() < 1e-3

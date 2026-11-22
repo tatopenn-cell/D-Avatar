@@ -1,0 +1,112 @@
+# D-Avatar guide
+
+D-Avatar takes the face landmarks that a tracker finds in each video frame and turns them into a few stable numbers that move an avatar: how open the eyes are, how open the mouth is, where the head points. When the tracker loses the face for a moment, the numbers keep moving smoothly instead of jumping. The numbers can be sent to an avatar program over the VMC protocol.
+
+This guide covers the video path only. The input is a stream of 68 landmarks per frame; the landmark detector is not part of D-Avatar.
+
+## 1. Install
+
+The only required libraries are `dense_armor` and `numpy`. `python-osc` is needed only to send VMC messages.
+
+```bash
+pip install "git+https://github.com/tatopenn-cell/D-Avatar.git#egg=d-avatar[osc]"
+```
+
+## 2. A landmark stream with a lost eye
+
+A landmark stream is one array of 68 (x, y) points per frame, plus a confidence for each point. A confidence of 0 means the tracker lost that point. The stream below is a neutral synthetic face; in frames 20 to 39 the left eye is lost and the tracker reports (0, 0) for its six points.
+
+```python
+import numpy as np
+from dense_armor.core.signals.vision.landmarks import LandmarkStream
+from d_avatar.synthetic import synthetic_face_68
+
+pts = np.tile(synthetic_face_68(), (100, 1, 1))
+conf = np.ones((100, 68))
+pts[20:40, 36:42] = 0.0
+conf[20:40, 36:42] = 0.0
+st = LandmarkStream(pts, conf, np.arange(100) / 30.0, fps=30.0)
+```
+
+The `LandmarkStream` yields one dictionary per frame with the keys `points`, `confidence` and `t`.
+
+## 3. From landmarks to parameters
+
+`AvatarPipeline` runs three steps on every frame: the shield (step 4) cleans the landmarks, a parameter step turns them into numbers, and an optional sender sends them. The parameters are `eye_l`, `eye_r`, `mouth_open`, `brow_l`, `brow_r` in [0, 1], `head_yaw`, `head_pitch`, `head_roll` in degrees, and `blink` (0 or 1).
+
+```python
+from d_avatar import AvatarPipeline
+
+ap = AvatarPipeline()
+out = [ap.step(f) for f in st]
+print(round(out[0]['eye_l'], 3), round(out[30]['eye_l'], 3))
+```
+
+The eye opening is the eye aspect ratio divided by the open-eye value of the person, which `BlinkCalibrator` learns online from the stream. Values in [0, 1] are smoothed with an exponential moving average and limited to 0.1 per frame; head angles are limited to 5 degrees per frame.
+
+## 4. The shield
+
+The shield gives every landmark its own constant-velocity Kalman filter. A point with confidence 0 only advances its prediction, so it keeps moving at its last speed; after `max_gap` frames it slides back to its neutral position. A point that jumps far away from its recent values is replaced by their median.
+
+```bash
+python examples/synthetic_occlusion.py --plot --out docs/assets/occlusion.png
+```
+
+The script builds the stream of step 2 with one more disturbance, a spike on an eyelid landmark in frame 60, and runs it with and without the shield. Output:
+
+```text
+max_jumps: {'eye_l': 0.0, 'eye_r': 0.0, 'mouth_open': 0.0, 'brow_l': 0.0, 'brow_r': 0.0, 'head_yaw': 0.0, 'head_pitch': 0.0, 'head_roll': 0.0, 'blink': 0.0}
+p99_latency_s: 0.002292
+```
+
+![Left eye opening with and without the shield](assets/occlusion.png)
+
+Without the shield the eye closes during the occlusion. With it, `eye_l` stays at 1.
+
+## 5. Send to an avatar program
+
+`VmcSender` sends one `/VMC/Ext/Blend/Val` message per parameter and one `/VMC/Ext/Blend/Apply` per frame over UDP. Give the pipeline a host and every frame is sent.
+
+```python
+from d_avatar import AvatarPipeline
+
+ap = AvatarPipeline(vmc_host='127.0.0.1', vmc_port=39539)
+ap.step({'points': pts[0], 'confidence': conf[0], 't': 0.0})
+```
+
+## Details
+
+### References
+
+- Thieu and Melnik 2025, *Nonlinear Dynamical Systems for Automatic Face Annotation in Head Tracking and Pose Estimation*, arXiv:2502.15179: Kalman equations (section 2.1, pp. 4-5), constant-velocity landmark tracking (section 4.2, p. 13).
+- Zhu et al. 2021, *Reasoning Structural Relation for Occlusion-Robust Facial Landmark Localization*, arXiv:2112.10087: occlusion that moves across the face in a video (introduction, pp. 1-2, 4-5), used as the test protocol.
+- Larey et al. 2023, *Facial Expression Re-targeting from a Single Character*, arXiv:2306.12188: 68 landmarks and weights in [0, 1] (section 3.4, p. 6), exponential moving average (section 3.2, p. 4), online two-class k-means for the blink (section 3.5.1, p. 6).
+- Kartynnik et al. 2019, *Real-time Facial Surface Geometry from Monocular Video on Mobile GPUs*, arXiv:1907.06724: temporal filtering of landmark jitter (section 5, p. 3).
+- VMC protocol: https://github.com/VirtualMotionCapture/VMCProtocol. The message layout is not checked against the specification in this repository.
+
+### Choices stated explicitly
+
+- The shield is the linear constant-velocity Kalman filter, a special case of the extended Kalman filter of Thieu and Melnik, written as numpy operations on all points at once. The tests compare it with `dense_armor` `KalmanFilter`.
+- The outlier rule is the causal Hampel rule of `dense_armor` `LandmarkCleaner`, written for all points at once; a test compares it with the one-value version.
+- The parameters come from plain geometry, not from the trained network of Larey et al. The scalings of eyebrows, mouth and head angles (`_BROW_MIN`, `_BROW_MAX`, `_MOUTH_MAX`, `_DEG_PER_IOD` in `params.py`) are fixed constants of this library: they are not taken from a paper and are not calibrated.
+- Rate limiting is a clip of the change per frame. It is not a control barrier filter.
+- Gaze is not computed: the 68-point layout has no iris landmarks, which Larey et al. need for it.
+- The parameter names are D-Avatar names, not VRM blendshape presets, and head angles are sent as blend values, not as bones. An avatar program may need a name mapping.
+- The Kalman noise values (`Q`, `R` in `shield.py`) are fixed and not calibrated on real landmarks.
+
+### Measured cost
+
+Measured in two Kaggle CPU kernel runs, 2000 frames of the synthetic face per step:
+
+| Step | p99, run 1 | p99, run 2 | median, run 2 | `budget_s` |
+|---|---|---|---|---|
+| `FaceShield` | 3.42 ms | 2.06 ms | 1.36 ms | 35 ms |
+| `ParamsStep` | 0.53 ms | 0.37 ms | 0.24 ms | 6 ms |
+| `VmcStep` | 0.37 ms | 0.24 ms | 0.14 ms | 4 ms |
+
+The declared budgets are ten times the larger of the two measured p99, rounded up. Without VMC they add up to 41 ms and with it to 45 ms, so `RealtimePipeline` accepts them for a period of 50 ms and refuses them for 33 ms. The p99 of the whole frame, measured by `examples/synthetic_occlusion.py` with the shield and the parameter step, was 3.12 ms in run 1 and 2.29 ms in run 2. Memory classes: `O(N * window)` for the shield, `O(1)` for the other two.
+
+### Development diary
+
+- The first version of the shield kept one `KalmanFilter` object and one Hampel window per point in Python loops. Its p99 was 17.0 ms per frame; the batched version brought it to 3.4 ms.
+- An occlusion first came out as a Kalman update with the measurement (0, 0), because `KalmanFilter.learn_one` treats an empty dictionary as a zero measurement. The shield now calls it with `None`, which only predicts.

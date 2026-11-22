@@ -2,22 +2,15 @@
 Parameter extraction from 68 landmarks.
 
 Source (Larey et al. 2023, arXiv:2306.12188):
-- §3.2 p. 4: landmarks aligned to frontal pose, blendshape weights post-processed
-  by Reasonable Array (binary table of target pairs; when pair not allowed,
-  smaller weight zeroed) and smoothed by exponential moving average.
-- §3.4 p. 6: 68 landmarks (68, 2), eight regions (eyebrow-left, eyebrow-right,
-  eye-left, eye-right, nose, nostril, teeth, lips), weights in [0, 1].
-- §3.5.1 p. 6: blink from eyelid distance, online two-class k-means (open, closed)
-  whose open-class value is the per-person low edge of the blink range.
-- §3.5.2 pp. 6-7: gaze from iris to eye-corner mid-point distance, normalized by
-  horizontal eye length.
+- §3.2 p. 4: blendshape weights smoothed over frames by an exponential moving average.
+- §3.4 p. 6: 68 landmarks (68, 2), weights in [0, 1].
+- §3.5.1 p. 6: blink from the eyelid distance, online two-class k-means (open, closed);
+  the open-class value is the per-person scale of the eye opening.
 
-Source (Kartynnik et al. 2019, arXiv:1907.06724):
-- §5 p. 3: temporal jitter filter stabilizing at low speed, avoiding lag at high
-  speed (One Euro Filter inspiration).
-
-This implementation uses plain geometry per region (not the trained network
-from the paper). Rate bounding uses dense_armor.core.robot.control.cbf_filter.
+The mapping is plain geometry on the iBUG ordering, not the trained network of the paper.
+The eyebrow, mouth and head-angle scalings are geometric heuristics with fixed constants
+(see the module constants); they are not taken from a paper and are not calibrated.
+Gaze is not computed: the 68-point layout has no iris landmarks (Larey §3.5.2 needs them).
 """
 
 from __future__ import annotations
@@ -26,122 +19,79 @@ from typing import Any
 
 import numpy as np
 
-# 68-point landmark indices (standard dlib/ibug ordering)
-# Regions per Larey §3.4 p. 6
-_LANDMARK_REGIONS = {
-    'eyebrow_left': list(range(17, 22)),  # 17-21
-    'eyebrow_right': list(range(22, 27)),  # 22-26
-    'eye_left': list(range(36, 42)),  # 36-41
-    'eye_right': list(range(42, 48)),  # 42-47
-    'nose': list(range(27, 36)),  # 27-35
-    'nostril': [31, 35],  # subset of nose
-    'teeth': list(range(60, 68)),  # 60-67 (inner mouth)
-    'lips': list(range(48, 60)),  # 48-59 (outer mouth)
-}
-
-# Eye landmark indices for blink/gaze (dlib 68-point)
-_EYE_LEFT_INDICES = [36, 37, 38, 39, 40, 41]
-_EYE_RIGHT_INDICES = [42, 43, 44, 45, 46, 47]
-# Iris approximation: center of eye region
-_IRIS_LEFT_IDX = 38
-_IRIS_RIGHT_IDX = 43
-
-# Constants
+EAR_OPEN_DEFAULT = 0.3
 _EPS = 1e-6
-_EAR_OPEN_MIN = 0.1
-_EAR_OPEN_MAX = 0.4
-_EAR_RANGE = _EAR_OPEN_MAX - _EAR_OPEN_MIN
+_BROW_MIN = 1.0
+_BROW_MAX = 2.0
+_MOUTH_MAX = 0.5
+_DEG_PER_IOD = 60.0
+_CLOSED_RATIO = 0.3
+_EYE_L = (36, 37, 38, 39, 40, 41)
+_EYE_R = (42, 43, 44, 45, 46, 47)
 
 
-def _eye_aspect_ratio(pts: np.ndarray, indices: list[int]) -> float:
-    """Eye aspect ratio (EAR) from 6 eye landmarks (dlib order).
-    EAR = (|p2-p6| + |p3-p5|) / (2 * |p1-p4|)
-    where indices = [left_corner, top_inner, top_outer, right_corner, bottom_outer, bottom_inner]
+def eye_aspect_ratio(pts: np.ndarray, idx: tuple[int, ...]) -> float:
+    """Eye aspect ratio from 6 eye landmarks p1..p6 in iBUG order.
+
+    EAR = (|p2 - p6| + |p3 - p5|) / (2 |p1 - p4|)
     """
-    p = pts[indices]
-    v1 = np.linalg.norm(p[1] - p[5])
-    v2 = np.linalg.norm(p[2] - p[4])
-    h = np.linalg.norm(p[0] - p[3])
+    p = pts[list(idx)]
+    h = float(np.linalg.norm(p[0] - p[3]))
     if h < _EPS:
         return 0.0
-    return float((v1 + v2) / (2.0 * h))
+    v = float(np.linalg.norm(p[1] - p[5]) + np.linalg.norm(p[2] - p[4]))
+    return v / (2.0 * h)
 
 
-def _eye_corner_midpoint(pts: np.ndarray, indices: list[int]) -> np.ndarray:
-    """Midpoint between inner and outer eye corners."""
-    return ((pts[indices[0]] + pts[indices[3]]) / 2.0).astype(np.float32)  # type: ignore[return-value]
+def eye_aspect_ratios(points: np.ndarray) -> tuple[float, float]:
+    """EAR of the left and right eye of a (68, 2) frame."""
+    pts = np.asarray(points, dtype=float)
+    return eye_aspect_ratio(pts, _EYE_L), eye_aspect_ratio(pts, _EYE_R)
 
 
-def _horizontal_eye_length(pts: np.ndarray, indices: list[int]) -> float:
-    """Distance between eye corners."""
-    return float(np.linalg.norm(pts[indices[0]] - pts[indices[3]]))
-
-
-def landmarks_to_params(points: np.ndarray) -> dict[str, float]:
-    """Map cleaned 68-point frame to named parameters in [0, 1] and degrees.
+def landmarks_to_params(points: np.ndarray, ear_open: float = EAR_OPEN_DEFAULT) -> dict[str, float]:
+    """Map a cleaned 68-point frame to named parameters.
 
     Args:
         points: (68, 2) array of (x, y) coordinates.
+        ear_open: eye aspect ratio of this person with open eyes (see BlinkCalibrator).
 
     Returns:
-        dict with keys:
-        - eye_l, eye_r: eye openness [0, 1] (1 = open)
-        - mouth_open: [0, 1]
-        - brow_l, brow_r: eyebrow raise [0, 1]
-        - gaze_x, gaze_y: [-1, 1] (left/right, up/down)
-        - head_yaw, head_pitch, head_roll: degrees
+        dict with
+        - eye_l, eye_r: min(EAR / ear_open, 1), 1 = open
+        - mouth_open: lip gap over mouth width, divided by 0.5, in [0, 1]
+        - brow_l, brow_r: eyebrow-to-eye distance over eye width, mapped from [1, 2] to [0, 1]
+        - head_yaw, head_pitch: nose-bridge offset from the eye centre over the
+          inter-ocular distance, times 60 degrees, in [-90, 90]
+        - head_roll: angle of the line between the outer eye corners, in degrees
 
-    Note: This uses plain geometry per region, not the trained network
-    from Larey §3.4. The Reasonable Array and EMA are applied by the caller.
+    Raises:
+        ValueError: if points is not (68, 2).
     """
-    pts = np.asarray(points, dtype=np.float32)
+    pts = np.asarray(points, dtype=float)
     if pts.shape != (68, 2):
         raise ValueError(f'Expected (68, 2), got {pts.shape}')
-
-    params = {}
-
-    ear_l = _eye_aspect_ratio(pts, _EYE_LEFT_INDICES)
-    ear_r = _eye_aspect_ratio(pts, _EYE_RIGHT_INDICES)
-    params['eye_l'] = float(np.clip((ear_l - _EAR_OPEN_MIN) / _EAR_RANGE, 0.0, 1.0))
-    params['eye_r'] = float(np.clip((ear_r - _EAR_OPEN_MIN) / _EAR_RANGE, 0.0, 1.0))
-
-    upper_lip = pts[51:53].mean(axis=0)
-    lower_lip = pts[57:59].mean(axis=0)
-    mouth_h = np.linalg.norm(upper_lip - lower_lip)
-    mouth_w = np.linalg.norm(pts[48] - pts[54])
-    params['mouth_open'] = float(np.clip(mouth_h / (mouth_w + _EPS), 0.0, 1.0))
-
-    brow_l_y = pts[17:22, 1].mean()
-    brow_r_y = pts[22:27, 1].mean()
-    eye_l_y = pts[36:42, 1].mean()
-    eye_r_y = pts[42:48, 1].mean()
-    eye_h_l = pts[37:41, 1].max() - pts[37:41, 1].min()
-    eye_h_r = pts[43:47, 1].max() - pts[43:47, 1].min()
-    params['brow_l'] = float(np.clip((eye_l_y - brow_l_y) / (eye_h_l + _EPS), 0.0, 1.0))
-    params['brow_r'] = float(np.clip((eye_r_y - brow_r_y) / (eye_h_r + _EPS), 0.0, 1.0))
-
-    iris_l = pts[_IRIS_LEFT_IDX]
-    iris_r = pts[_IRIS_RIGHT_IDX]
-    corner_l = _eye_corner_midpoint(pts, _EYE_LEFT_INDICES)
-    corner_r = _eye_corner_midpoint(pts, _EYE_RIGHT_INDICES)
-    h_len_l = _horizontal_eye_length(pts, _EYE_LEFT_INDICES)
-    h_len_r = _horizontal_eye_length(pts, _EYE_RIGHT_INDICES)
-
-    gaze_x_l = (iris_l[0] - corner_l[0]) / (h_len_l + _EPS)
-    gaze_x_r = (iris_r[0] - corner_r[0]) / (h_len_r + _EPS)
-    params['gaze_x'] = float(np.clip((gaze_x_l + gaze_x_r) / 2.0, -1.0, 1.0))
-
-    gaze_y_l = (iris_l[1] - corner_l[1]) / (h_len_l + _EPS)
-    gaze_y_r = (iris_r[1] - corner_r[1]) / (h_len_r + _EPS)
-    params['gaze_y'] = float(np.clip((gaze_y_l + gaze_y_r) / 2.0, -1.0, 1.0))
-
-    nose_bridge = pts[27:31].mean(axis=0)
-    eye_center = pts[36:48].mean(axis=0)
-    params['head_yaw'] = float(np.clip((nose_bridge[0] - eye_center[0]) * 10.0, -90.0, 90.0))
-    params['head_pitch'] = float(np.clip((nose_bridge[1] - eye_center[1]) * 10.0, -90.0, 90.0))
-    eye_vec = pts[45] - pts[36]
-    params['head_roll'] = float(np.degrees(np.arctan2(eye_vec[1], eye_vec[0])))
-
+    ear_l, ear_r = eye_aspect_ratios(pts)
+    scale = max(float(ear_open), _EPS)
+    params = {
+        'eye_l': float(np.clip(ear_l / scale, 0.0, 1.0)),
+        'eye_r': float(np.clip(ear_r / scale, 0.0, 1.0)),
+    }
+    mouth_w = float(np.linalg.norm(pts[48] - pts[54]))
+    mouth_h = float(np.linalg.norm(pts[51:53].mean(axis=0) - pts[57:59].mean(axis=0)))
+    params['mouth_open'] = float(np.clip(mouth_h / (mouth_w + _EPS) / _MOUTH_MAX, 0.0, 1.0))
+    for name, brow, eye in (('brow_l', slice(17, 22), _EYE_L), ('brow_r', slice(22, 27), _EYE_R)):
+        eye_w = float(np.linalg.norm(pts[eye[0]] - pts[eye[3]]))
+        rise = float(pts[list(eye), 1].mean() - pts[brow, 1].mean()) / (eye_w + _EPS)
+        params[name] = float(np.clip((rise - _BROW_MIN) / (_BROW_MAX - _BROW_MIN), 0.0, 1.0))
+    eye_l_c = pts[list(_EYE_L)].mean(axis=0)
+    eye_r_c = pts[list(_EYE_R)].mean(axis=0)
+    iod = float(np.linalg.norm(eye_r_c - eye_l_c)) + _EPS
+    offset = pts[27:31].mean(axis=0) - (eye_l_c + eye_r_c) / 2.0
+    params['head_yaw'] = float(np.clip(offset[0] / iod * _DEG_PER_IOD, -90.0, 90.0))
+    params['head_pitch'] = float(np.clip(offset[1] / iod * _DEG_PER_IOD, -90.0, 90.0))
+    corner = pts[45] - pts[36]
+    params['head_roll'] = float(np.degrees(np.arctan2(corner[1], corner[0])))
     return params
 
 
@@ -151,88 +101,74 @@ def ema(prev: float, new: float, alpha: float) -> float:
 
 
 class BlinkCalibrator:
-    """Online two-class k-means for blink detection (Larey §3.5.1 p. 6).
+    """Online two-class k-means on the eye aspect ratio (Larey §3.5.1 p. 6).
 
-    Centroids: centroids[0] = closed (lower EAR), centroids[1] = open (higher EAR).
-    The open-class centroid is the per-person low edge of the blink range.
+    The classes are closed (index 0) and open (index 1). The first sample seeds the open
+    centroid, and the closed centroid is seeded at 0.3 times that value, so the first
+    sample is assumed to be an open eye. Each sample updates its nearest centroid with a
+    running mean whose count is capped at ``max_count``, so the centroids keep adapting.
+
+    Args:
+        max_count: cap of the per-centroid count (default 200).
     """
 
-    def __init__(self) -> None:
-        self._centroids: np.ndarray | None = None  # shape (2,) [closed, open]
-        self._counts: np.ndarray | None = None
-        self._initialized = False
+    def __init__(self, max_count: int = 200) -> None:
+        self.max_count = int(max_count)
+        self._c: np.ndarray | None = None
+        self._n: np.ndarray | None = None
 
     def update(self, ear: float) -> None:
-        """Update k-means with new EAR value."""
-        if not self._initialized:
-            # Initialize: closed = ear - 0.15, open = ear (assuming first frame is open)
-            self._centroids = np.array([ear - 0.15, ear], dtype=np.float32)
-            self._counts = np.array([1, 1], dtype=np.int32)
-            self._initialized = True
+        """Update the centroids with one EAR value."""
+        if self._c is None or self._n is None:
+            self._c = np.array([ear * _CLOSED_RATIO, ear], dtype=float)
+            self._n = np.array([1, 1], dtype=int)
             return
+        k = int(np.argmin(np.abs(self._c - ear)))
+        self._n[k] = min(int(self._n[k]) + 1, self.max_count)
+        self._c[k] += (ear - self._c[k]) / self._n[k]
 
-        # Type narrowing for mypy
-        assert self._centroids is not None
-        assert self._counts is not None
-
-        # Assign to nearest centroid
-        dists = np.abs(self._centroids - ear)
-        idx = int(np.argmin(dists))
-
-        # Update assigned centroid
-        n = self._counts[idx]
-        self._centroids[idx] = (self._centroids[idx] * n + ear) / (n + 1)
-        self._counts[idx] += 1
-
-        # Ensure ordering: closed < open
-        if self._centroids[0] > self._centroids[1]:
-            self._centroids = self._centroids[::-1]
-            self._counts = self._counts[::-1]
+    def open_ear(self) -> float:
+        """EAR of the open class; EAR_OPEN_DEFAULT before the first sample."""
+        return EAR_OPEN_DEFAULT if self._c is None else float(self._c[1])
 
     def is_blink(self, ear: float) -> bool:
-        """Return True if EAR is closer to closed centroid (centroids[0])."""
-        if not self._initialized:
+        """True if the EAR is closer to the closed centroid."""
+        if self._c is None:
             return False
-        assert self._centroids is not None
-        dists = np.abs(self._centroids - ear)
-        return int(np.argmin(dists)) == 0
-
-    def blink_threshold(self) -> float:
-        """Return the open-class centroid (low edge of blink range)."""
-        if not self._initialized:
-            return 0.2
-        assert self._centroids is not None
-        return float(self._centroids[1])  # type: ignore[return-value]
+        return int(np.argmin(np.abs(self._c - ear))) == 0
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         return {
-            'centroids': self._centroids.tolist() if self._centroids is not None else None,
-            'counts': self._counts.tolist() if self._counts is not None else None,
+            'max_count': self.max_count,
+            'centroids': None if self._c is None else self._c.tolist(),
         }
 
 
 class RateBound:
-    """Rate bound using CBF safety filter (Kartynnik §5 p. 3 + dense_armor CBF)."""
+    """Clip the per-frame change of each named parameter to a maximum step.
 
-    budget_s: float = 1e-3
-    memory_class: str = 'O(1)'
+    Args:
+        max_step: maximum absolute change per frame, for every name without its own bound.
+        per_name: maximum change per frame for specific names (e.g. head angles in degrees).
 
-    def __init__(self, max_step: float) -> None:
+    The first value of a name is returned unchanged.
+    """
+
+    def __init__(self, max_step: float, per_name: dict[str, float] | None = None) -> None:
         self.max_step = float(max_step)
+        self.per_name = dict(per_name) if per_name else {}
         self._prev: dict[str, float] = {}
 
     def step(self, name: str, value: float) -> float:
-        """Apply rate bound to a parameter."""
-        if name not in self._prev:
-            self._prev[name] = value
-            return value
-
-        current = self._prev[name]
-        u_des = value - current
-        bounded_change = np.clip(u_des, -self.max_step, self.max_step)
-        bounded_value = current + bounded_change
-        self._prev[name] = bounded_value
-        return bounded_value
+        """Return the value moved at most the bound of ``name`` away from the previous output."""
+        prev = self._prev.get(name)
+        if prev is None:
+            self._prev[name] = float(value)
+            return float(value)
+        bound = self.per_name.get(name, self.max_step)
+        out = prev + float(np.clip(value - prev, -bound, bound))
+        self._prev[name] = out
+        return out
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
-        return {'max_step': self.max_step, 'prev': self._prev.copy()}
+        return {'max_step': self.max_step, 'per_name': dict(self.per_name)}

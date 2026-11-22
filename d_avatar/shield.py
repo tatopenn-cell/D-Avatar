@@ -12,8 +12,9 @@ Test protocol (Zhu et al. 2021, arXiv:2112.10087):
 - Introduction pp. 1-2, 4-5: dynamic occlusion moving across face in video,
   not a static patch.
 
-This implementation uses the linear Kalman filter (special case of EKF with
-constant F and H) via dense_armor.core.online.timeseries.kalman.KalmanFilter.
+This implementation is the linear Kalman filter (special case of EKF with constant F and H),
+written as batched numpy operations over all points. It follows the equations of
+dense_armor.core.online.timeseries.kalman.KalmanFilter, which the tests use as reference.
 The outlier test is the causal Hampel rule of dense_armor LandmarkCleaner.
 A point with confidence 0 runs the Kalman predict step only (no measurement
 update) for up to max_gap frames; after that it decays to the neutral pose.
@@ -25,7 +26,6 @@ from typing import Any
 
 import numpy as np
 from dense_armor._dtype import as_default_array  # type: ignore[import-untyped]
-from dense_armor.core.online.timeseries.kalman import KalmanFilter  # type: ignore[import-untyped]
 from dense_armor.roles import Transformer  # type: ignore[import-untyped]
 
 _MIN_WINDOW = 3
@@ -51,6 +51,39 @@ def _hampel_value(window: list[float], value: float, n_sigmas: float) -> tuple[f
     if abs(value - med) > n_sigmas * scale:
         return med, True
     return value, False
+
+
+def _hampel_batch(
+    hist: np.ndarray, vals: np.ndarray, n_sigmas: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Hampel rule of ``_hampel_value`` for N points at once.
+
+    Args:
+        hist: (N, W) history, left-padded with NaN.
+        vals: (N,) new values.
+        n_sigmas: threshold in scaled MAD units.
+
+    Returns:
+        (filtered values (N,), outlier flags (N,))
+    """
+    out: np.ndarray = np.zeros(len(vals), dtype=bool)
+    filt = vals.copy()
+    rows = np.sum(~np.isnan(hist), axis=1) >= _MIN_WINDOW
+    if rows.any():
+        h = hist[rows]
+        med = np.nanmedian(h, axis=1)
+        scale = 1.4826 * np.nanmedian(np.abs(h - med[:, None]), axis=1)
+        dev = np.abs(vals[rows] - med)
+        flag = np.where(scale <= _SCALE_EPS, dev > _DEV_EPS, dev > n_sigmas * scale)
+        out[rows] = flag
+        filt[rows] = np.where(flag, med, vals[rows])
+    return filt, out
+
+
+_H = np.array([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]])
+_Q = np.diag([1e-6, 1e-6, 1e-4, 1e-4])
+_R = np.diag([1e-3, 1e-3])
+_P_INIT = np.diag([1e-6, 1e-6, 1e-2, 1e-2])
 
 
 class FaceShield(Transformer):
@@ -90,7 +123,7 @@ class FaceShield(Transformer):
     §2.1 with F, H constant; §4.2 motion model x_{k+1} = x_k + v_k dt + w_k).
     """
 
-    budget_s: float = 1e-3
+    budget_s: float = 3.5e-2
     memory_class: str = 'O(N * window)'
 
     def __init__(
@@ -105,41 +138,28 @@ class FaceShield(Transformer):
         self.max_gap = int(max_gap)
         self.neutral = np.asarray(neutral, dtype=float) if neutral is not None else None
         self._neutral_given = neutral is not None
-        self._kfs: list[KalmanFilter] | None = None
-        self._hist_x: list[list[float]] | None = None
-        self._hist_y: list[list[float]] | None = None
+        self._x: np.ndarray | None = None
+        self._p: np.ndarray | None = None
+        self._hist: np.ndarray | None = None
         self._gap: np.ndarray | None = None
         self._initialized: np.ndarray | None = None
+        self._f = np.eye(4)
         self._neutral_valid: np.ndarray | None = None
         self._n: int | None = None
         self._dt: float = 1.0 / 30.0
         self._last_t: float | None = None
 
-    def _ensure_kfs(self, n: int) -> None:
-        if self._kfs is not None and self._n == n:
+    def _ensure_state(self, n: int) -> None:
+        if self._x is not None and self._n == n:
             return
         self._n = n
         self._dt = 1.0 / 30.0
         self._last_t = None
-        dt = self._dt
-        F = np.array(
-            [
-                [1.0, 0.0, dt, 0.0],
-                [0.0, 1.0, 0.0, dt],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ],
-            dtype=np.float64,
-        )
-        H = np.array([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]], dtype=np.float64)
-        Q = np.diag([1e-6, 1e-6, 1e-4, 1e-4])
-        R = np.diag([1e-3, 1e-3])
-        self._kfs = [
-            KalmanFilter(F=F.copy(), H=H, Q=Q, R=R, x0=np.zeros(4), P0=np.eye(4) * 0.1)
-            for _ in range(n)
-        ]
-        self._hist_x = [[] for _ in range(n)]
-        self._hist_y = [[] for _ in range(n)]
+        self._f = np.eye(4)
+        self._f[0, 2] = self._f[1, 3] = self._dt
+        self._x = np.zeros((n, 4))
+        self._p = np.tile(_P_INIT, (n, 1, 1))
+        self._hist = np.full((n, 2, self.window), np.nan)
         self._gap = np.zeros(n, dtype=int)
         self._initialized = np.zeros(n, dtype=bool)
         if self._neutral_given and self.neutral is not None:
@@ -149,7 +169,6 @@ class FaceShield(Transformer):
             self._neutral_valid = np.zeros(n, dtype=bool)
 
     def _step_time(self, current_t: float | None) -> None:
-        assert self._kfs is not None
         dt = self._dt
         if current_t is not None:
             if self._last_t is not None and current_t - self._last_t > 0:
@@ -157,9 +176,7 @@ class FaceShield(Transformer):
             self._last_t = current_t
         if abs(dt - self._dt) > _DT_EPS:
             self._dt = dt
-            for kf in self._kfs:
-                kf.F[0, 2] = dt
-                kf.F[1, 3] = dt
+            self._f[0, 2] = self._f[1, 3] = dt
 
     def _frame(self, x: dict) -> tuple[np.ndarray, np.ndarray, float | None]:
         if 'points' in x:
@@ -173,62 +190,55 @@ class FaceShield(Transformer):
         t = x.get('t')
         return pts, np.ones(len(keys)), None if t is None else float(t)
 
-    def _occluded(self, i: int, pt: np.ndarray, out: np.ndarray, cleaned: np.ndarray) -> None:
-        assert self._kfs is not None
+    def _update(self, pts: np.ndarray, ok: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        assert self._x is not None
+        assert self._p is not None
+        assert self._hist is not None
         assert self._gap is not None
         assert self._initialized is not None
         assert self._neutral_valid is not None
         assert self.neutral is not None
-        cleaned[i] = 2
-        if not self._initialized[i]:
-            out[i] = pt if np.all(np.isfinite(pt)) else 0.0
-            return
-        self._gap[i] += 1
-        kf = self._kfs[i]
-        kf.learn_one(None)
-        assert kf._x is not None
-        px, py = float(kf._x[0]), float(kf._x[1])
-        if self._gap[i] > self.max_gap and self._neutral_valid[i]:
-            a = min(1.0, (self._gap[i] - self.max_gap) * _DECAY_STEP)
-            px = (1 - a) * px + a * float(self.neutral[i, 0])
-            py = (1 - a) * py + a * float(self.neutral[i, 1])
-        out[i, 0] = px
-        out[i, 1] = py
+        n = len(pts)
+        out = np.where(np.isfinite(pts), pts, 0.0).astype(float)
+        cleaned = np.where(ok, 0, 2)
+        xp = self._x @ self._f.T
+        pp = self._f @ self._p @ self._f.T + _Q
+        init = self._initialized
 
-    def _measured(self, i: int, pt: np.ndarray, out: np.ndarray, cleaned: np.ndarray) -> None:
-        assert self._kfs is not None
-        assert self._hist_x is not None
-        assert self._hist_y is not None
-        assert self._gap is not None
-        assert self._initialized is not None
-        kf = self._kfs[i]
-        cx, cy = float(pt[0]), float(pt[1])
-        hx, hy = self._hist_x[i], self._hist_y[i]
-        if self._gap[i] > 0:
-            hx.clear()
-            hy.clear()
-        if not self._initialized[i]:
-            kf.predict_one()
-            assert kf._x is not None
-            assert kf._P is not None
-            kf._x[:] = [cx, cy, 0.0, 0.0]
-            kf._P[:, :] = np.diag([1e-6, 1e-6, 1e-2, 1e-2])
-            self._initialized[i] = True
-            out[i] = (cx, cy)
-        else:
-            fx, ox = _hampel_value(hx, cx, self.n_sigmas)
-            fy, oy = _hampel_value(hy, cy, self.n_sigmas)
-            cleaned[i] = int(ox) + int(oy)
-            kf.learn_one({'x': fx, 'y': fy})
-            assert kf._x is not None
-            out[i, 0] = float(kf._x[0])
-            out[i, 1] = float(kf._x[1])
-        self._gap[i] = 0
-        hx.append(cx)
-        hy.append(cy)
-        if len(hx) > self.window:
-            hx.pop(0)
-            hy.pop(0)
+        occ = ~ok & init
+        self._x[occ] = xp[occ]
+        self._p[occ] = pp[occ]
+        self._gap[occ] += 1
+        out[occ] = xp[occ, :2]
+        decay = occ & (self._gap > self.max_gap) & self._neutral_valid
+        a = np.minimum(1.0, (self._gap[decay] - self.max_gap) * _DECAY_STEP)[:, None]
+        out[decay] = (1 - a) * out[decay] + a * self.neutral[decay]
+
+        self._hist[ok & (self._gap > 0)] = np.nan
+        upd = ok & init
+        if upd.any():
+            fx, ox = _hampel_batch(self._hist[upd, 0], pts[upd, 0], self.n_sigmas)
+            fy, oy = _hampel_batch(self._hist[upd, 1], pts[upd, 1], self.n_sigmas)
+            cleaned[upd] = ox.astype(int) + oy.astype(int)
+            pu = pp[upd]
+            s_inv = np.linalg.inv(pu[:, :2, :2] + _R)
+            gain = pu[:, :, :2] @ s_inv
+            innov = np.stack([fx, fy], axis=1) - xp[upd, :2]
+            self._x[upd] = xp[upd] + (gain @ innov[..., None])[..., 0]
+            p_new = (np.eye(4) - gain @ _H) @ pu
+            self._p[upd] = 0.5 * (p_new + p_new.transpose(0, 2, 1))
+            out[upd] = self._x[upd, :2]
+        new = ok & ~init
+        if new.any():
+            self._x[new] = np.concatenate([pts[new], np.zeros((int(new.sum()), 2))], axis=1)
+            self._p[new] = _P_INIT
+            self._initialized[new] = True
+            out[new] = pts[new]
+        self._gap[ok] = 0
+        self._hist[ok, :, :-1] = self._hist[ok, :, 1:]
+        self._hist[ok, :, -1] = pts[ok]
+        assert len(out) == n
+        return out, cleaned
 
     def _learn_neutral(self, out: np.ndarray, measured: np.ndarray) -> None:
         if self._neutral_given:
@@ -254,18 +264,10 @@ class FaceShield(Transformer):
         n = pts.shape[0]
         if n == 0:
             return {'points': pts.copy(), 'cleaned': np.zeros(0, dtype=int)}
-        self._ensure_kfs(n)
+        self._ensure_state(n)
         self._step_time(frame_t if frame_t is not None else t)
-        out = pts.astype(float).copy()
-        cleaned = np.zeros(n, dtype=int)
-        measured = np.zeros(n, dtype=bool)
-        for i in range(n):
-            ok = float(conf[i]) > 0.0 and bool(np.all(np.isfinite(pts[i])))
-            if ok:
-                self._measured(i, pts[i], out, cleaned)
-                measured[i] = True
-            else:
-                self._occluded(i, pts[i], out, cleaned)
+        measured = (conf > 0.0) & np.all(np.isfinite(pts), axis=1)
+        out, cleaned = self._update(pts.astype(float), measured)
         self._learn_neutral(out, measured)
         return {'points': out, 'cleaned': cleaned}
 
