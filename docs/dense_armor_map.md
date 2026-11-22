@@ -142,3 +142,32 @@ profile p99: 0.000001 s, budget_s: 0.001, fits: True
 ```
 
 All chosen primitives have p99 well within the 5 ms budget (period_s = 0.05 s, budget per step ≈ 5 ms). The `budget_s` for each step in D-Avatar should be set to 10× the measured p99, never below 1 ms.
+
+---
+
+## Shield comparison: LandmarkCleaner vs FaceShield (Item B.2)
+
+The map initially chose `LandmarkCleaner` for the shield job (occlusion + outliers + jitter). However, comparison on the synthetic occlusion stream shows it does **not** meet the contract:
+
+| Metric | LandmarkCleaner | FaceShield (current) |
+|---|---|---|
+| p99 latency (static face) | 25.4 ms | 2.6 ms |
+| p99 latency (moving face) | 26.8 ms | 2.7 ms |
+| Mean error on held landmarks (static) | 43.1 px | 43.1 px |
+| Mean error on held landmarks (moving) | 53.4 px | 47.4 px |
+| `budget_s` declared | NOT SET | 35 ms |
+| Kalman prediction during gaps | No (holds last value) | Yes (constant-velocity) |
+| Neutral decay after max_gap | No | Yes |
+| Hampel outlier filter | Yes (per-coordinate) | Yes (batched) |
+
+**Why LandmarkCleaner does not replace FaceShield:**
+
+1. **Different output contract**: FaceShield uses a constant-velocity Kalman filter to predict landmark positions during occlusion (gap filling). LandmarkCleaner only holds the last seen value. On a moving face, this causes LandmarkCleaner's error to be ~13% higher (53.4 vs 47.4 px).
+
+2. **Missing features**: LandmarkCleaner lacks neutral-pose decay after `max_gap` frames and does not declare a `budget_s`.
+
+3. **Performance**: LandmarkCleaner's p99 (25-27 ms) is ~10× slower than FaceShield's (2.6-2.7 ms), though both are within the 35 ms budget.
+
+4. **Tests would fail**: Existing tests (`test_face_shield_constant_velocity_during_gap`, `test_face_shield_variable_fps`, `test_face_shield_gap_decays_to_neutral`) explicitly test Kalman prediction and neutral decay, which LandmarkCleaner does not provide.
+
+**Decision**: Keep `FaceShield` in D-Avatar. Per Item C, the batched implementation (constant-velocity Kalman + batched Hampel + neutral decay) will be contributed to Dense-Armor as a new primitive `BatchedLandmarkShield` on branch `feature/batched-landmark-shield`.
