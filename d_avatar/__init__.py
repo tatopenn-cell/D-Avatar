@@ -4,7 +4,7 @@ D-Avatar: landmark stream to stable avatar parameters to OSC/VMC.
 An application on top of `dense_armor`.
 """
 
-from d_avatar.capture import CameraSource, camera_stream_frames
+from d_avatar.capture import camera_stream_frames
 from d_avatar.detector import FaceDetector
 from d_avatar.gaze import GazeCalibrator, iris_displacement
 from d_avatar.mcp import DAvatarMCPTools, get_params, list_presets, set_limits, set_preset
@@ -19,7 +19,6 @@ __version__ = '0.1.0'
 __all__ = [
     'AvatarPipeline',
     'BlinkCalibrator',
-    'CameraSource',
     'DAvatarMCPTools',
     'FaceDetector',
     'FaceShield',

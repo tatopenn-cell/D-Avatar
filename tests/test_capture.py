@@ -1,7 +1,7 @@
 """Tests for capture.py: camera sources yielding (t, image) frames.
 
 Runs without opencv-python installed: cv2 is imported only inside
-CameraSource.open_default and camera_stream_frames.
+camera_stream_frames.
 """
 
 import inspect
@@ -9,72 +9,7 @@ import inspect
 import numpy as np
 from dense_armor.core.signals.vision.streams import Frame
 
-from d_avatar.capture import CameraSource, camera_stream_frames
-
-
-class _FakeCap:
-    """A capture that yields `n` frames then reports a failed read."""
-
-    def __init__(self, n: int = 5) -> None:
-        self.n = int(n)
-        self.i = 0
-        self.released = False
-
-    def read(self):
-        if self.i >= self.n:
-            return False, None
-        frame = np.full((4, 4, 3), float(self.i), dtype=np.uint8)
-        self.i += 1
-        return True, frame
-
-    def release(self) -> None:
-        self.released = True
-
-
-def test_frames_yield_relative_timestamps_starting_near_zero():
-    """Timestamps should start near 0 and be non-decreasing."""
-    cap = _FakeCap(5)
-    src = CameraSource(cap, clock=lambda: 0.0)
-    frames = list(src.frames())
-    assert len(frames) == 5
-    ts = [t for t, _ in frames]
-    # First timestamp should be ~0 (relative to start)
-    assert abs(ts[0]) < 1e-6
-    # Non-decreasing
-    assert all(b >= a for a, b in zip(ts, ts[1:], strict=False))
-
-
-def test_frames_stop_on_failing_read():
-    cap = _FakeCap(3)
-    src = CameraSource(cap, clock=lambda: 0.0)
-    frames = list(src.frames())
-    assert len(frames) == 3
-
-
-def test_close_releases_capture():
-    cap = _FakeCap(5)
-    src = CameraSource(cap)
-    src.close()
-    assert cap.released is True
-
-
-def test_frames_with_advancing_clock():
-    """Timestamps advance with the clock."""
-    now = [0.0]
-
-    def clock():
-        result = now[0]
-        now[0] += 0.033
-        return result
-
-    cap = _FakeCap(5)
-    src = CameraSource(cap, clock=clock)
-    frames = list(src.frames())
-    ts = [t for t, _ in frames]
-    assert abs(ts[0]) < 1e-6
-    # Differences should be ~0.033
-    diffs = [b - a for a, b in zip(ts, ts[1:], strict=False)]
-    assert all(abs(d - 0.033) < 1e-3 for d in diffs)
+from d_avatar.capture import camera_stream_frames
 
 
 class _FakeStream:
@@ -98,25 +33,21 @@ class _FakeStream:
         return frame
 
 
-def test_camera_stream_frames_with_fake_capture():
-    """camera_stream_frames works with a fake stream (no opencv)."""
-    frames = [np.full((4, 4, 3), float(i), dtype=np.float32) / 255.0 for i in range(5)]
-    _FakeStream(frames, fps=30.0)
+class _PatchedCameraStream:
+    """A patched CameraStream that uses our fake frames instead of opencv."""
 
-    # camera_stream_frames is the function we want to test, but it creates CameraStream internally.
-    # We can't easily mock CameraStream without opencv, so we test the CameraStream directly.
-    # The function camera_stream_frames just iterates CameraStream.
+    def __init__(self, frames, fps=30.0) -> None:
+        self._frames = frames
+        self._fps = fps
 
-    # Test that CameraStream iterates correctly with our fake frames
-    cap = _FakeCap(5)
-    cap.read = lambda: (True, (np.full((4, 4, 3), 0.5, dtype=np.float32) * 255).astype(np.uint8))
-    # Can't test CameraStream without opencv, but we can test the iteration logic
-    # by using a patched CameraStream that doesn't need opencv
-    pass
+    def __iter__(self):
+        for i, frame in enumerate(self._frames):
+            t = i / self._fps
+            yield Frame(array=frame, t=t)
 
 
 def test_camera_stream_frames_yields_frames():
-    """Test that iterating CameraStream yields (t, rgb_frame) pairs."""
+    """Test that iterating camera_stream_frames yields (t, rgb_frame) pairs."""
     # We test the iteration protocol by checking the function exists
     # and has the right signature. The actual CameraStream needs opencv.
     sig = inspect.signature(camera_stream_frames)
@@ -124,3 +55,43 @@ def test_camera_stream_frames_yields_frames():
     assert 'fps' in sig.parameters
     assert 'size' in sig.parameters
     assert 'gray' in sig.parameters
+
+
+def test_camera_stream_frames_with_fake_stream():
+    """Test camera_stream_frames with a patched CameraStream (no opencv)."""
+    frames = [np.full((4, 4, 3), float(i), dtype=np.float32) / 255.0 for i in range(5)]
+
+    # Monkey-patch CameraStream to use our fake stream
+    import d_avatar.capture as capture_module
+
+    original_camera_stream = capture_module.CameraStream
+    capture_module.CameraStream = lambda *args, **kwargs: _PatchedCameraStream(frames, fps=30.0)
+
+    try:
+        results = list(camera_stream_frames(device=0, fps=30.0, gray=False))
+        assert len(results) == 5
+        for i, (t, frame) in enumerate(results):
+            assert abs(t - i / 30.0) < 1e-6
+            expected = np.full((4, 4, 3), float(i), dtype=np.float32) / 255.0
+            np.testing.assert_allclose(frame, expected)
+    finally:
+        capture_module.CameraStream = original_camera_stream
+
+
+def test_camera_stream_frames_yields_rgb_float32():
+    """Test that camera_stream_frames yields RGB float32 frames in [0, 1]."""
+    frames = [np.full((4, 4, 3), float(i), dtype=np.float32) / 255.0 for i in range(3)]
+
+    import d_avatar.capture as capture_module
+
+    original_camera_stream = capture_module.CameraStream
+    capture_module.CameraStream = lambda *args, **kwargs: _PatchedCameraStream(frames, fps=30.0)
+
+    try:
+        for _t, frame in camera_stream_frames(device=0, fps=30.0, gray=False):
+            assert frame.dtype == np.float32
+            assert frame.ndim == 3
+            assert frame.shape[2] == 3  # RGB
+            assert np.all(frame >= 0.0) and np.all(frame <= 1.0)
+    finally:
+        capture_module.CameraStream = original_camera_stream
