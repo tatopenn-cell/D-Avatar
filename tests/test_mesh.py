@@ -33,13 +33,14 @@ _TOL = 1e-6
 def _synthetic_mesh_468() -> np.ndarray:
     """Neutral 468-point mesh in MediaPipe convention.
 
-    Image-left eye contour -> iBUG 36-41 (ellipse centre (30, 35), rx 5, ry 3),
-    image-right eye contour -> iBUG 42-47 (centre (70, 35)). Nose centred at
-    x = 50 so head_yaw is 0; closed mouth so mouth_open is ~0.
+    Normal (non-mirrored) camera image convention:
+    - FACEMESH_LEFT_EYE at x=70 (person's LEFT eye, iBUG 36-41)
+    - FACEMESH_RIGHT_EYE at x=30 (person's RIGHT eye, iBUG 42-47)
+    Nose centred at x=50 so head_yaw is 0; closed mouth so mouth_open is ~0.
     """
     mesh = np.zeros((468, 2), dtype=float)
-    # Face contours
-    for contour, cx in ((FACEMESH_LEFT_EYE, 30.0), (FACEMESH_RIGHT_EYE, 70.0)):
+    # Face contours: LEFT_EYE at x=70 (person's LEFT), RIGHT_EYE at x=30 (person's RIGHT)
+    for contour, cx in ((FACEMESH_LEFT_EYE, 70.0), (FACEMESH_RIGHT_EYE, 30.0)):
         loop = _contour_loop(contour)
         for p, idx in enumerate(loop):
             theta = 2.0 * np.pi * p / len(loop)
@@ -49,7 +50,7 @@ def _synthetic_mesh_468() -> np.ndarray:
     # Closed mouth: all lip vertices at one point -> mouth_open ~ 0.
     for idx in sorted({i for e in FACEMESH_LIPS for i in e}):
         mesh[idx] = [50.0, 70.0]
-    for contour, cx in ((FACEMESH_LEFT_EYEBROW, 30.0), (FACEMESH_RIGHT_EYEBROW, 70.0)):
+    for contour, cx in ((FACEMESH_LEFT_EYEBROW, 70.0), (FACEMESH_RIGHT_EYEBROW, 30.0)):
         loop = _contour_loop(contour)
         for p, idx in enumerate(loop):
             theta = 2.0 * np.pi * p / len(loop)
@@ -61,12 +62,12 @@ def _synthetic_mesh_478() -> np.ndarray:
     """The 468 neutral mesh plus the 10 refined iris vertices (469-477)."""
     mesh = _synthetic_mesh_468()
     mesh = np.vstack([mesh, np.zeros((10, 2), dtype=float)])
-    # Image-left eye (iBUG left) uses MediaPipe LEFT_IRIS indices 474-477;
-    # image-right eye uses RIGHT_IRIS indices 469-472.
+    # Normal convention: LEFT_IRIS (474-477) at x=70 (person's LEFT eye)
+    # RIGHT_IRIS (469-472) at x=30 (person's RIGHT eye)
     for idx in range(474, 478):
-        mesh[idx] = [30.0, 35.0]
-    for idx in range(469, 473):
         mesh[idx] = [70.0, 35.0]
+    for idx in range(469, 473):
+        mesh[idx] = [30.0, 35.0]
     return mesh
 
 
@@ -84,16 +85,16 @@ def test_synthetic_mesh_known_geometry():
     pts = mesh_to_68(mesh)
     assert pts.shape == (68, 2)
     # Corners: outer = temple side, inner = nose side.
-    # In a non-mirrored camera image: person's LEFT eye (iBUG 36-41) is at
-    # higher x (right side of image), person's RIGHT eye (iBUG 42-47) at lower x.
-    # Synthetic mesh: FACEMESH_LEFT_EYE at x=30 (person's RIGHT eye),
-    # FACEMESH_RIGHT_EYE at x=70 (person's LEFT eye).
-    # Person's LEFT eye (iBUG 36-41) at x~70: outer=36 at max x (75), inner=39 at min x (65).
-    assert np.allclose(pts[36], [75.0, 35.0], atol=_TOL)  # left outer (temple)
-    assert np.allclose(pts[39], [65.0, 35.0], atol=_TOL)  # left inner (nose)
-    # Person's RIGHT eye (iBUG 42-47) at x~30: inner=42 at min x (25), outer=45 at max x (35).
-    assert np.allclose(pts[42], [25.0, 35.0], atol=_TOL)  # right inner (nose)
-    assert np.allclose(pts[45], [35.0, 35.0], atol=_TOL)  # right outer (temple)
+    # DA1 convention: indices 36-41 = person's RIGHT eye, 42-47 = person's LEFT eye.
+    # Synthetic mesh: FACEMESH_LEFT_EYE at x=70 (person's LEFT eye),
+    # FACEMESH_RIGHT_EYE at x=30 (person's RIGHT eye).
+    # DA1 convention puts RIGHT eye at 36-41, LEFT eye at 42-47.
+    # Person's RIGHT eye (iBUG 36-41) at x~30: outer=36 at min x (25), inner=39 at max x (35).
+    assert np.allclose(pts[36], [25.0, 35.0], atol=_TOL)  # right outer (temple)
+    assert np.allclose(pts[39], [35.0, 35.0], atol=_TOL)  # right inner (nose)
+    # Person's LEFT eye (iBUG 42-47) at x~70: inner=42 at max x (75), outer=45 at min x (65).
+    assert np.allclose(pts[42], [75.0, 35.0], atol=_TOL)  # left inner (nose)
+    assert np.allclose(pts[45], [65.0, 35.0], atol=_TOL)  # left outer (temple)
     # Lid points: upper lids above the corners, lower lids below.
     assert pts[37, 1] < 35.0 and pts[38, 1] < 35.0
     assert pts[40, 1] > 35.0 and pts[41, 1] > 35.0

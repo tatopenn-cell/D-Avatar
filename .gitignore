@@ -34,3 +34,4 @@ docs/site/
 *.log
 tmp/
 .face_landmarker.task
+face_landmarker.task

@@ -90,7 +90,7 @@ def landmarks_to_params(points: np.ndarray, ear_open: float = EAR_OPEN_DEFAULT) 
     offset = pts[27:31].mean(axis=0) - (eye_l_c + eye_r_c) / 2.0
     params['head_yaw'] = float(np.clip(offset[0] / iod * _DEG_PER_IOD, -90.0, 90.0))
     params['head_pitch'] = float(np.clip(offset[1] / iod * _DEG_PER_IOD, -90.0, 90.0))
-    corner = pts[36] - pts[45]
+    corner = pts[45] - pts[36]
     params['head_roll'] = float(np.degrees(np.arctan2(corner[1], corner[0])))
     return params
 

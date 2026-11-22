@@ -258,16 +258,13 @@ def _lid_point(
 def _eye_map(
     mesh: np.ndarray,
     contour: frozenset[tuple[int, int]],
-    ibug_side: str,  # 'LEFT' for iBUG 36-41, 'RIGHT' for iBUG 42-47
+    target_range: str,  # '36-41' for DA1 RIGHT eye, '42-47' for DA1 LEFT eye
 ) -> dict[str, int]:
     """Map one eye contour to its six iBUG eye indices (36-41 or 42-47).
 
-    The corner assignment depends on which iBUG eye this is:
-    - iBUG LEFT eye (36-41): outer=36 (temple) is at MAX x, inner=39 (nose) at MIN x
-    - iBUG RIGHT eye (42-47): inner=42 (nose) at MIN x, outer=45 (temple) at MAX x
-
-    This matches a non-mirrored camera image where the person's left eye
-    appears on the right side of the image (higher x).
+    The corner assignment depends on the target index range:
+    - '36-41' (DA1 RIGHT eye): outer=36 at MIN x (temple), inner=39 at MAX x (nose)
+    - '42-47' (DA1 LEFT eye): outer=45 at MIN x (temple), inner=42 at MAX x (nose)
 
     Returns a dict with keys ``outer``, ``inner``, ``top1``, ``top2``,
     ``bot1``, ``bot2`` holding mesh vertex indices.
@@ -287,14 +284,14 @@ def _eye_map(
         top_arc, bot_arc = arc_bwd, arc_fwd
     corner_min = mesh[int(loop[i_min])]
     corner_max = mesh[int(loop[i_max])]
-    if ibug_side == 'LEFT':
-        # iBUG left eye (36-41): outer=36 at MAX x, inner=39 at MIN x
-        outer_idx = int(loop[i_max])
-        inner_idx = int(loop[i_min])
-    else:  # 'RIGHT'
-        # iBUG right eye (42-47): inner=42 at MIN x, outer=45 at MAX x
-        inner_idx = int(loop[i_min])
-        outer_idx = int(loop[i_max])
+    if target_range == '36-41':
+        # DA1 RIGHT eye (36-41): outer=36 at MIN x (temple), inner=39 at MAX x (nose)
+        outer_idx = int(loop[i_min])
+        inner_idx = int(loop[i_max])
+    else:  # '42-47'
+        # DA1 LEFT eye (42-47): outer=45 at MIN x (temple), inner=42 at MAX x (nose)
+        outer_idx = int(loop[i_min])
+        inner_idx = int(loop[i_max])
     top1 = _lid_point(mesh, top_arc, corner_min, corner_max, 1.0 / 3.0)
     top2 = _lid_point(mesh, top_arc, corner_min, corner_max, 2.0 / 3.0)
     bot1 = _lid_point(mesh, bot_arc, corner_min, corner_max, 1.0 / 3.0)
@@ -333,37 +330,39 @@ def mesh_to_68(mesh: np.ndarray) -> np.ndarray:  # noqa: PLR0915, PLR0912
     xy = pts[:, :2]
     out: np.ndarray = np.full((68, 2), np.nan, dtype=float)
 
-    # Map eye contours by image position, not MediaPipe naming.
-    # In a non-mirrored image: contour at lower mean x = person's RIGHT eye (iBUG 42-47)
-    #                        contour at higher mean x = person's LEFT eye (iBUG 36-41)
+    # Map eye contours to DA1 convention (RIGHT eye at 36-41, LEFT at 42-47).
+    # In a non-mirrored image: contour at lower mean x = person's RIGHT eye -> indices 36-41
+    #                         contour at higher mean x = person's LEFT eye -> indices 42-47
     left_eye_contour = FACEMESH_LEFT_EYE
     right_eye_contour = FACEMESH_RIGHT_EYE
     left_pts = xy[list(left_eye_contour)]
     right_pts = xy[list(right_eye_contour)]
 
     if float(left_pts[:, 0].mean()) <= float(right_pts[:, 0].mean()):
-        # LEFT_EYE contour is at lower x = person's RIGHT eye (iBUG RIGHT, 42-47)
-        right_eye_map = _eye_map(xy, left_eye_contour, 'RIGHT')
-        left_eye_map = _eye_map(xy, right_eye_contour, 'LEFT')
+        # LEFT_EYE contour at lower x = person's RIGHT eye -> indices 36-41
+        # RIGHT_EYE contour at higher x = person's LEFT eye -> indices 42-47
+        eye_map_36_41 = _eye_map(xy, left_eye_contour, '36-41')
+        eye_map_42_47 = _eye_map(xy, right_eye_contour, '42-47')
     else:
-        # LEFT_EYE contour is at higher x = person's LEFT eye (iBUG LEFT, 36-41)
-        left_eye_map = _eye_map(xy, left_eye_contour, 'LEFT')
-        right_eye_map = _eye_map(xy, right_eye_contour, 'RIGHT')
+        # LEFT_EYE contour at higher x = person's LEFT eye -> indices 42-47
+        # RIGHT_EYE contour at lower x = person's RIGHT eye -> indices 36-41
+        eye_map_36_41 = _eye_map(xy, right_eye_contour, '36-41')
+        eye_map_42_47 = _eye_map(xy, left_eye_contour, '42-47')
 
-    # iBUG 36-41: left eye. outer=36 (temple), inner=39 (nose).
-    out[36] = xy[left_eye_map['outer']]
-    out[37] = xy[left_eye_map['top1']]
-    out[38] = xy[left_eye_map['top2']]
-    out[39] = xy[left_eye_map['inner']]
-    out[40] = xy[left_eye_map['bot1']]
-    out[41] = xy[left_eye_map['bot2']]
-    # iBUG 42-47: right eye. inner=42 (nose), outer=45 (temple).
-    out[42] = xy[right_eye_map['inner']]
-    out[43] = xy[right_eye_map['top1']]
-    out[44] = xy[right_eye_map['top2']]
-    out[45] = xy[right_eye_map['outer']]
-    out[46] = xy[right_eye_map['bot1']]
-    out[47] = xy[right_eye_map['bot2']]
+    # Indices 36-41: RIGHT eye (person's RIGHT). outer=36 (temple), inner=39 (nose).
+    out[36] = xy[eye_map_36_41['outer']]
+    out[37] = xy[eye_map_36_41['top1']]
+    out[38] = xy[eye_map_36_41['top2']]
+    out[39] = xy[eye_map_36_41['inner']]
+    out[40] = xy[eye_map_36_41['bot1']]
+    out[41] = xy[eye_map_36_41['bot2']]
+    # Indices 42-47: LEFT eye (person's LEFT). inner=42 (nose), outer=45 (temple).
+    out[42] = xy[eye_map_42_47['inner']]
+    out[43] = xy[eye_map_42_47['top1']]
+    out[44] = xy[eye_map_42_47['top2']]
+    out[45] = xy[eye_map_42_47['outer']]
+    out[46] = xy[eye_map_42_47['bot1']]
+    out[47] = xy[eye_map_42_47['bot2']]
 
     # Brows: 17-26 from the two eyebrow contours (5 points each).
     # Each contour has 10 vertices; pick 5 by sampling along the sorted x.
@@ -384,8 +383,8 @@ def mesh_to_68(mesh: np.ndarray) -> np.ndarray:  # noqa: PLR0915, PLR0912
     out[30] = xy[int(tip)]
     # Nose bridge 27-31: five points from the nose contour between the eyes.
     # Pick vertices nearest the eye inner corners, ordered by y.
-    left_inner = xy[left_eye_map['inner']]
-    right_inner = xy[right_eye_map['inner']]
+    left_inner = xy[eye_map_42_47['inner']]
+    right_inner = xy[eye_map_36_41['inner']]
     bridge_center_x = (float(left_inner[0]) + float(right_inner[0])) / 2.0
     # Sort nose vertices by x to find ones near the center
     nose_x_order = np.argsort(nose_pts[:, 0])
@@ -484,13 +483,13 @@ def iris_centres(mesh: np.ndarray) -> np.ndarray:
     left_pts = xy[list(FACEMESH_LEFT_EYE)]
     right_pts = xy[list(FACEMESH_RIGHT_EYE)]
     if float(left_pts[:, 0].mean()) <= float(right_pts[:, 0].mean()):
-        # LEFT_EYE contour at lower x = normal image
-        # person's RIGHT eye -> LEFT_IRIS (iBUG RIGHT)
-        # person's LEFT eye -> RIGHT_IRIS (iBUG LEFT)
-        first_iris, second_iris = FACEMESH_RIGHT_IRIS, FACEMESH_LEFT_IRIS
+        # Mirrored image: FACEMESH_LEFT_EYE (lower x) = person's RIGHT eye
+        # FACEMESH_RIGHT_EYE (higher x) = person's LEFT eye
+        left_iris, right_iris = FACEMESH_RIGHT_IRIS, FACEMESH_LEFT_IRIS
     else:
-        # Mirrored: RIGHT_EYE at lower x = person's RIGHT eye
-        first_iris, second_iris = FACEMESH_LEFT_IRIS, FACEMESH_RIGHT_IRIS
+        # Normal image: FACEMESH_LEFT_EYE (higher x) = person's LEFT eye
+        # FACEMESH_RIGHT_EYE (lower x) = person's RIGHT eye
+        left_iris, right_iris = FACEMESH_LEFT_IRIS, FACEMESH_RIGHT_IRIS
 
     def centre(iris_edges: frozenset[tuple[int, int]]) -> np.ndarray:
         idx = np.array(sorted({i for e in iris_edges for i in e}), dtype=int)
@@ -498,4 +497,4 @@ def iris_centres(mesh: np.ndarray) -> np.ndarray:
             return np.zeros(2, dtype=float)
         return xy[idx].mean(axis=0).astype(float)  # type: ignore[no-any-return]
 
-    return np.stack([centre(first_iris), centre(second_iris)], axis=0).astype(float)  # type: ignore[no-any-return]
+    return np.stack([centre(left_iris), centre(right_iris)], axis=0).astype(float)  # type: ignore[no-any-return]
