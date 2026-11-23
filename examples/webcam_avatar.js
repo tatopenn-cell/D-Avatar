@@ -78,6 +78,126 @@ function init() {
   initHands();
 }
 
+function loadHandsScript() {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1650995939/hands.js';
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('CDN bloccato o non raggiungibile'));
+    document.head.appendChild(script);
+  });
+}
+
+async function initHands() {
+  try {
+    if (!window.Hands) {
+      await loadHandsScript();
+    }
+    const Hands = window.Hands;
+    if (!Hands) {
+      console.warn('MediaPipe Hands non disponibile');
+      state.hands = null;
+      state.handsReady = false;
+      return;
+    }
+    state.hands = new Hands({
+      locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1650995939/${f}`,
+    });
+    state.hands.setOptions({
+      maxNumHands: 2,
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.5,
+    });
+    state.hands.onResults(onHandsResults);
+    state.handsReady = true;
+    els.handBadge.textContent = 'HAND: PRONTO';
+    els.handBadge.className = 'pill-small pill-green';
+  } catch (e) {
+    console.warn('Impossibile inizializzare MediaPipe Hands:', e);
+    state.hands = null;
+    state.handsReady = false;
+    els.handBadge.textContent = 'HAND: ERRORE';
+    els.handBadge.className = 'pill-small pill-red';
+  }
+}
+
+async function retryHands() {
+  state.hands = null;
+  state.handsReady = false;
+  els.handBadge.textContent = 'HAND: CARICAMENTO...';
+  els.handBadge.className = 'pill-small pill-amber';
+  await initHands();
+}
+
+function onHandsResults(results) {
+  state.handsResults = results;
+  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+    els.handBadge.textContent = 'HAND: OK';
+    els.handBadge.className = 'pill-small pill-green';
+  } else {
+    els.handBadge.textContent = 'HAND: --';
+    els.handBadge.className = 'pill-small pill-red';
+  }
+}
+
+function drawSyntheticHand(ctx, x, y, color = '#EF4444') {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(0.5, 0.5);
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.strokeStyle = color; ctx.fillStyle = color;
+  ctx.beginPath(); ctx.ellipse(0, 0, 22, 28, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  const fingers = [
+    { ang: -25, len: 26 },
+    { ang: -10, len: 34 },
+    { ang: 10, len: 34 },
+    { ang: 30, len: 30 },
+    { ang: 50, len: 26 },
+  ];
+  fingers.forEach(f => {
+    ctx.save(); ctx.rotate((f.ang * Math.PI) / 180);
+    ctx.beginPath(); ctx.moveTo(0, 2); ctx.lineTo(0, -f.len); ctx.stroke();
+    ctx.restore();
+  });
+  ctx.restore();
+}
+
+function drawHands(ctx, w, h) {
+  // Mani da MediaPipe (se disponibile)
+  if (state.handsResults && state.handsResults.multiHandLandmarks) {
+    const dpr = window.devicePixelRatio || 1;
+    const cw = w / dpr, ch = h / dpr;
+    state.handsResults.multiHandLandmarks.forEach(lm => {
+      const x = (1 - lm[0].x) * cw;
+      const y = lm[0].y * ch;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(0.6, 0.6);
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.strokeStyle = '#EF4444'; ctx.fillStyle = '#EF4444';
+      ctx.beginPath(); ctx.ellipse(0, 0, 22, 28, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      const fingers = [
+        { ang: -25, len: 26 },
+        { ang: -10, len: 34 },
+        { ang: 10, len: 34 },
+        { ang: 30, len: 30 },
+        { ang: 50, len: 26 },
+      ];
+      fingers.forEach(f => {
+        ctx.save(); ctx.rotate((f.ang * Math.PI) / 180);
+        ctx.beginPath(); ctx.moveTo(0, 2); ctx.lineTo(0, -f.len); ctx.stroke();
+        ctx.restore();
+      });
+      ctx.restore();
+    });
+  }
+
+  // Mano sintetica dal mouse (fallback quando MediaPipe non c'è)
+  else if (state.mouseHand.active && state.mouseHand.x != null) {
+    drawSyntheticHand(ctx, state.mouseHand.x, state.mouseHand.y);
+  }
+}
+
 function initLayers() {
   state.layers = {};
   const names = ['head', 'eyes-open', 'eyes-closed', 'mouth-open', 'mouth-closed', 'hand-default', 'hand-horns'];
@@ -169,8 +289,7 @@ async function startWebcam() {
     els.video.play();
     state.cameraOn = true;
     state.cameraAvailable = true;
-    const tg = $('webcam-toggle');
-    if (tg) tg.checked = true;
+    $('webcam-toggle').checked = true;
     $('btn-camera').textContent = 'SPEGNI CAMERA';
     $('btn-camera').style.background = 'var(--accent-primary)';
     $('btn-camera').style.color = '#fff';
@@ -437,6 +556,23 @@ function initEvents() {
   $('sw-black').addEventListener('click', () => setBg('black'));
   $('sw-green').addEventListener('click', () => setBg('green'));
   $('sw-trans').addEventListener('click', () => setBg('trans'));
+
+  // Retry tracciamento mani (MediaPipe)
+  $('btn-retry-hands').addEventListener('click', async () => {
+    await retryHands();
+  });
+
+  // Tracciamento mano sintetico (fallback quando MediaPipe non è disponibile)
+  els.canvas.addEventListener('mousemove', (e) => {
+    const rect = els.canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    state.mouseHand.x = (e.clientX - rect.left) * dpr;
+    state.mouseHand.y = (e.clientY - rect.top) * dpr;
+    state.mouseHand.active = true;
+  });
+  els.canvas.addEventListener('mouseleave', () => {
+    state.mouseHand.active = false;
+  });
 
   // Chiudi pannello errore camera
   $('camera-error-close')?.addEventListener('click', () => {
