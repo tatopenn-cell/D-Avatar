@@ -109,9 +109,15 @@
   </div>
   <div id="header-controls" style="margin-left:auto;display:flex;align-items:center;gap:8px;">
     <label style="font-size:11px;color:var(--text-secondary);">Camera</label>
-    <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="webcam-toggle" checked style="accent-color:var(--accent-primary);"><span style="font-size:11px;">Sorgente Webcam</span></label>
+    <button id="btn-camera" style="padding:6px 14px;border-radius:6px;border:1px solid var(--accent-primary);color:var(--text-primary);background:transparent;cursor:pointer;font-weight:600;">ATTIVA CAMERA</button>
+    <button id="btn-test-cam" style="padding:6px 14px;border-radius:6px;border:1px solid var(--status-alert);color:var(--status-alert);background:transparent;cursor:pointer;font-weight:600;">Test Webcam</button>
     <button id="btn-clean" style="padding:6px 12px;border-radius:6px;border:1px solid var(--accent-primary);color:var(--text-primary);background:transparent;cursor:pointer;">Modalità Pulita / Solo Avatar</button>
     <button id="btn-retry-hands" style="padding:6px 12px;border-radius:6px;border:1px solid var(--accent-primary);color:var(--text-primary);background:transparent;cursor:pointer;">Retry Tracciamento Mani</button>
+  </div>
+  <div id="camera-error" style="position:fixed;top:60px;left:50%;transform:translateX(-50%);background:rgba(239,68,68,0.95);color:#fff;padding:12px 20px;border-radius:8px;font-family:sans-serif;z-index:200;display:none;max-width:600px;text-align:center;">
+    <div id="camera-error-msg" style="font-weight:bold;"></div>
+    <div id="camera-error-hint" style="font-size:12px;opacity:0.9;margin-top:6px;"></div>
+    <button id="camera-error-close" style="margin-top:8px;padding:6px 12px;border:none;border-radius:4px;background:#fff;color:#EF4444;cursor:pointer;">Chiudi</button>
   </div>
 </header>
 <div id="main">

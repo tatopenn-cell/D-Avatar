@@ -271,11 +271,33 @@ function initEvents() {
       $('btn-camera').style.color = '#fff';
       els.faceBadge.textContent = 'CAM: OK';
       els.faceBadge.className = 'pill-small pill-green';
+      $('camera-error').style.display = 'none';
     } catch (e) {
       $('btn-camera').textContent = 'ATTIVA CAMERA';
       els.faceBadge.textContent = 'CAM: NEGATA';
       els.faceBadge.className = 'pill-small pill-red';
-      alert('Webcam non attivabile.\n\nCosa fare:\n1. Accetta il permesso quando il browser lo chiede (icona lucchetto nella barra indirizzi).\n2. Usa http://localhost:8000 (non aprire il file con doppio clic).\n3. Chiudi altre app che usano la webcam (Zoom, Teams, OBS).\n\nErrore: ' + e.message);
+      showCameraError(e.message);
+    }
+  });
+
+  // Checkbox legacy: mantiene sincronizzato con lo stato
+  $('webcam-toggle').addEventListener('change', (e) => {
+    if (e.target.checked && !state.cameraOn) {
+      $('btn-camera').click();
+    } else if (!e.target.checked && state.cameraOn) {
+      $('btn-camera').click();
+    }
+  });
+
+  // Test diagnostico webcam (mostra errore nella pagina, non in console)
+  $('btn-test-cam').addEventListener('click', async () => {
+    $('camera-error').style.display = 'none';
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+      stream.getTracks().forEach(t => t.stop());
+      showCameraError('Webcam FUNZIONA. Il permesso è stato concesso.', true);
+    } catch (e) {
+      showCameraError(e.message, false);
     }
   });
 
@@ -415,6 +437,11 @@ function initEvents() {
   $('sw-green').addEventListener('click', () => setBg('green'));
   $('sw-trans').addEventListener('click', () => setBg('trans'));
 
+  // Chiudi pannello errore camera
+  $('camera-error-close')?.addEventListener('click', () => {
+    $('camera-error').style.display = 'none';
+  });
+
   // Retry tracciamento mani (MediaPipe)
   $('btn-retry-hands').addEventListener('click', async () => {
     await retryHands();
@@ -461,6 +488,21 @@ function updateSubtabs() {
   const subs = $('subtabs');
   const hasSub = ['eyes', 'mouth', 'hand'].includes(state.currentLayer);
   subs.style.display = hasSub ? 'flex' : 'none';
+}
+
+function showCameraError(msg, ok) {
+  const box = $('camera-error');
+  const m = $('camera-error-msg');
+  const h = $('camera-error-hint');
+  m.textContent = msg;
+  box.style.display = 'block';
+  if (ok) {
+    box.style.background = 'rgba(16,185,129,0.95)';
+    h.textContent = 'La webcam è accessibile. Clicca ATTIVA CAMERA per usarla nell\'app.';
+  } else {
+    box.style.background = 'rgba(239,68,68,0.95)';
+    h.textContent = 'Cosa fare:\n1. Clicca l\'icona lucchetto 🔒 nella barra indirizzi del browser e imposta la fotocamera su Consenti.\n2. Ricarica la pagina.\n3. Usa http://127.0.0.1:8000/webcam_avatar.html (NON aprire il file con doppio clic).\n4. Chiudi altre app che usano la webcam (Zoom, Teams, OBS, Chrome con altre tab).';
+  }
 }
 
 function applyCleanMode() {
