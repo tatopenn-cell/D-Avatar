@@ -3,194 +3,192 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>D-Avatar Studio — Live Input</title>
+<title>D-Avatar — Live Avatar</title>
 <style>
-  :root{
-    --bg-app:#0D0F12;
-    --bg-panel:#161920;
-    --bg-elevated:#212530;
-    --border-subtle:#2A2F3D;
-    --accent-primary:#6366F1;
-    --accent-hover:#4F46E5;
-    --status-live:#10B981;
-    --status-alert:#EF4444;
-    --chroma-green:#00FF00;
-    --text-primary:#F3F4F6;
-    --text-secondary:#9CA3AF;
-  }
   *{box-sizing:border-box;margin:0;padding:0;}
-  html,body{height:100%;overflow:hidden;background:var(--bg-app);color:var(--text-primary);font-family:Inter,-apple-system,sans-serif;}
-  #app{display:flex;flex-direction:column;height:100%;}
-  header{
-    height:56px;
-    border-bottom:1px solid var(--border-subtle);
-    display:flex;align-items:center;padding:0 16px;
-    gap:12px;
-  }
-  .logo{font-weight:700;letter-spacing:1px;font-size:16px;}
-  .pill{font-size:11px;padding:2px 8px;border-radius:999px;background:#212530;color:var(--status-live);border:1px solid var(--status-live);}
-  #bg-buttons{display:flex;gap:4px;}
-  .sw{border-radius:50%;width:20px;height:20px;border:2px solid transparent;cursor:pointer;}
-  .sw.active{border-color:#fff;}
-  .sw.tr{background:#000000;}
-  .sw.ch{background:var(--chroma-green);}
-  .sw.trans{background:#2A2F3D;background-image:linear-gradient(45deg,#ccc 25%,transparent 25%),linear-gradient(45deg,transparent 25%,#ccc 25%),linear-gradient(45deg,#ccc 75%,transparent 75%),linear-gradient(45deg,#ccc 75%,transparent 75%);background-size:10px 10px;background-position:0 0,0 10px,10px -10px,-10px 0px;}
-  .sw:focus{outline-color:var(--accent-primary);}
-  #main{flex:1;display:flex;overflow:hidden;}
-  .stage-area{flex:1;position:relative;display:flex;align-items:center;justify-content:center;background:#0a0a12;}
-  #canvas-wrap{
-    position:relative;
-    display:flex;align-items:center;justify-content:center;
-    box-shadow:0 20px 40px rgba(0,0,0,0.5);
-    border-radius:12px;
-    border:1px solid var(--border-subtle);
-    background:#000;
-  }
-  #main-canvas{display:block;max-width:100%;max-height:80%;width:640px;height:480px;}
-  .pip{
-    position:absolute;
-    bottom:20px;left:20px;
-    width:200px;height:150px;
-    border:1px solid var(--border-subtle);
-    border-radius:8px;
-    overflow:hidden;
-    background:#000;
-    display:flex;align-items:center;justify-content:center;
-  }
-  #pip-cam{width:100%;height:100%;transform:scaleX(-1);}
-  .eye-overlay{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;}
-  .hud{position:absolute;top:10px;right:10px;display:flex;gap:8px;flex-wrap:wrap;}
-  .pill-small{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid;color:#fff;}
-  .pill-green{color:#10B981;border-color:#10B981;background:rgba(16,185,129,0.15);}
-  .pill-amber{color:#FACC15;border-color:#FACC15;background:rgba(250,204,21,0.15);}
-  .pill-red{color:#EF4444;border-color:#EF4444;background:rgba(239,68,68,0.15);}
-  .panel-right{
-    width:440px;
-    display:flex;flex-direction:column;
-    background:var(--bg-panel);
-    border-left:1px solid var(--border-subtle);
-    overflow:hidden;
-  }
-  .panel-header{padding:10px 12px;background:rgba(255,255,255,0.03);border-bottom:1px solid var(--border-subtle);font-weight:600;font-size:14px;}
-  .tabs{display:flex;border-bottom:1px solid var(--border-subtle);}
-  .tab{flex:1;padding:8px 6px;text-align:center;font-size:12px;cursor:pointer;color:var(--text-secondary);border-bottom:2px solid transparent;}
-  .tab.active{color:var(--accent-primary);border-bottom-color:var(--accent-primary);}
-  .panel-body{flex:1;overflow:auto;display:flex;flex-direction:column;}
-  .pad-wrap{padding:12px;display:flex;flex-direction:column;gap:8px;}
-  .canvas-wrap{position:relative;width:100%;aspect-ratio:1;border:1px solid var(--border-subtle);border-radius:8px;overflow:hidden;background:#000;}
-  #draw-canvas{width:100%;height:100%;cursor:crosshair;}
-  .crosshair{position:absolute;width:16px;height:16px;border:2px solid var(--accent-primary);border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;display:none;}
-  .tbar{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;}
-  .c-swatch{width:16px;height:16px;border-radius:50%;border:1px solid #fff;cursor:pointer;}
-  .c-swatch.active{box-shadow:0 0 0 2px #fff;}
-  .range-wrap{display:flex;align-items:center;gap:6px;}
-  .c-range{flex:1;}
-  #save-png{width:100%;padding:6px;background:var(--accent-primary);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;}
-  #save-png:hover{background:var(--accent-hover);}
-  .panel-footer{padding:10px 12px;border-top:1px solid var(--border-subtle);display:flex;flex-direction:column;gap:6px;}
-  .range-row{display:flex;align-items:center;gap:6px;}
-  .val{width:40px;text-align:right;font-size:12px;color:var(--text-secondary);}
-  .btn-wide{width:100%;padding:10px;border:none;border-radius:6px;background:var(--accent-primary);color:#fff;font-weight:600;cursor:pointer;}
-  .btn-wide:hover{background:var(--accent-hover);}
-  .btn-wide:active{transform:translateY(1px);}
-  .status-bar{font-size:11px;color:var(--text-secondary);padding:2px 8px;background:rgba(0,0,0,0.3);border-radius:4px;}
+  body{background:#0B0E14;color:#F8FAFC;font-family:sans-serif;height:100vh;overflow:hidden;display:flex;flex-direction:column;}
+  header{height:48px;background:#151922;border-bottom:1px solid #262C3A;display:flex;align-items:center;padding:0 18px;gap:12px;}
+  .logo{font-weight:800;letter-spacing:2px;color:#6366F1;}
+  .main{flex:1;display:flex;overflow:hidden;}
+  .stage{flex:1;background:radial-gradient(circle at 50% 30%,#161B26 0%,#0B0E14 100%);position:relative;display:flex;align-items:center;justify-content:center;}
+  #canvas{display:block;max-width:90vw;max-height:80vh;filter:drop-shadow(0 20px 50px rgba(0,0,0,0.6));}
+  .pip{position:absolute;bottom:24px;right:24px;width:220px;height:165px;background:#000;border-radius:12px;overflow:hidden;border:2px solid #262C3A;}
+  #pip{width:100%;height:100%;object-fit:cover;transform:scaleX(-1);}
+  .controls{position:absolute;bottom:0;left:0;right:0;height:64px;background:#151922;border-top:1px solid #262C3A;display:flex;align-items:center;justify-content:center;gap:12px;}
+  .btn{background:#6366F1;color:#fff;border:none;border-radius:8px;padding:10px 18px;font-weight:600;cursor:pointer;}
+  .btn:hover{background:#4F46E5;}
+  .btn.danger{border:1px solid #EF4444;color:#EF4444;background:transparent;}
+  .btn.danger:hover{background:#EF4444;color:#fff;}
+  .error{position:fixed;top:100px;left:50%;transform:translateX(-50%);background:rgba(239,68,68,0.95);color:#fff;padding:12px 20px;border-radius:8px;font-family:sans-serif;z-index:100;display:none;max-width:600px;text-align:center;}
+  .error b{display:block;}
+  .error .hint{font-size:12px;opacity:0.9;margin-top:6px;}
+  .error .close{margin-top:8px;padding:6px 12px;border:none;border-radius:4px;background:#fff;color:#EF4444;cursor:pointer;}
+  .status{position:absolute;top:24px;right:24px;display:flex;align-items:center;gap:8px;background:rgba(11,14,20,0.85);border:1px solid #262C3A;border-radius:20px;padding:6px 12px;font-size:12px;z-index:50;}
+  .dot{width:10px;height:10px;border-radius:50%;background:#EF4444;box-shadow:0 0 8px #EF4444;}
+  .dot.ok{background:#22C55E;box-shadow:0 0 12px #22C55E;}
 </style>
 </head>
 <body>
-<div id="app">
-<header>
-  <div class="logo">D-AVATAR LIVE</div>
-  <div class="pill">LOCAL LIVE2D</div>
-  <div style="flex:1"></div>
-  <div id="bg-buttons">
-    <div class="sw tr" id="sw-black" title="Nero"></div>
-    <div class="sw ch active" id="sw-green" title="Green Screen"></div>
-    <div class="sw trans" id="sw-trans" title="Trasparente"></div>
-  </div>
-  <div id="header-controls" style="margin-left:auto;display:flex;align-items:center;gap:8px;">
-    <label style="font-size:11px;color:var(--text-secondary);">Camera</label>
-    <button id="btn-camera" style="padding:6px 14px;border-radius:6px;border:1px solid var(--accent-primary);color:var(--text-primary);background:transparent;cursor:pointer;font-weight:600;">ATTIVA CAMERA</button>
-    <button id="btn-test-cam" style="padding:6px 14px;border-radius:6px;border:1px solid var(--status-alert);color:var(--status-alert);background:transparent;cursor:pointer;font-weight:600;">Test Webcam</button>
-    <button id="btn-clean" style="padding:6px 12px;border-radius:6px;border:1px solid var(--accent-primary);color:var(--text-primary);background:transparent;cursor:pointer;">Modalità Pulita / Solo Avatar</button>
-    <button id="btn-retry-hands" style="padding:6px 12px;border-radius:6px;border:1px solid var(--accent-primary);color:var(--text-primary);background:transparent;cursor:pointer;">Retry Tracciamento Mani</button>
-  </div>
-  <div id="camera-error" style="position:fixed;top:60px;left:50%;transform:translateX(-50%);background:rgba(239,68,68,0.95);color:#fff;padding:12px 20px;border-radius:8px;font-family:sans-serif;z-index:200;display:none;max-width:600px;text-align:center;">
-    <div id="camera-error-msg" style="font-weight:bold;"></div>
-    <div id="camera-error-hint" style="font-size:12px;opacity:0.9;margin-top:6px;"></div>
-    <button id="camera-error-close" style="margin-top:8px;padding:6px 12px;border:none;border-radius:4px;background:#fff;color:#EF4444;cursor:pointer;">Chiudi</button>
-  </div>
-</header>
-<div id="main">
-  <div class="stage-area">
-    <div id="canvas-wrap">
-      <canvas id="main-canvas" width="640" height="480"></canvas>
-      <video id="webcam-video" style="display:none" muted playsinline></video>
-      <canvas id="pip-cam" width="200" height="150"></canvas>
-    </div>
-    <div class="hud">
-      <span class="pill-small pill-green" id="badge-face">FACE: --</span>
-      <span class="pill-small pill-green" id="badge-hand">HAND: --</span>
-      <span class="pill-small pill-amber" id="badge-fps">FPS: --</span>
-    </div>
-  </div>
-  <div class="panel-right">
-    <div class="panel-header">LAYER &amp; DISEGNO</div>
-    <div class="panel-body">
-      <div class="tabs" id="layer-tabs">
-        <div class="tab active" data-layer="head">Testa</div>
-        <div class="tab" data-layer="eyes">Occhi</div>
-        <div class="tab" data-layer="mouth">Bocca</div>
-        <div class="tab" data-layer="hand">Mani</div>
-      </div>
-      <div class="subtabs" id="subtabs" style="display:none;">
-        <div class="tab active" data-state="open">Aperto</div>
-        <div class="tab" data-state="closed">Chiuso</div>
-        <div class="tab" data-state="hand-default">Default</div>
-        <div class="tab" data-state="hand-horns">Corna 🤘</div>
-      </div>
-      <div class="pad-wrap">
-        <div class="canvas-wrap">
-          <canvas id="draw-canvas" width="300" height="300"></canvas>
-          <div class="crosshair" id="crosshair"></div>
-        </div>
-        <div class="tbar">
-          <label style="font-size:11px;color:var(--text-secondary);">Colore</label>
-          <div class="c-swatch active" data-color="#ffffff" style="background:#ffffff;"></div>
-          <div class="c-swatch" data-color="#18181B" style="background:#18181B;"></div>
-          <div class="c-swatch" data-color="#FAFAFA" style="background:#FAFAFA;"></div>
-          <div class="c-swatch" data-color="#FDBA74" style="background:#FDBA74;"></div>
-          <div class="c-swatch" data-color="#78350F" style="background:#78350F;"></div>
-          <div class="c-swatch" data-color="#F43F5E" style="background:#F43F5E;"></div>
-          <div class="c-swatch" data-color="#38BDF8" style="background:#38BDF8;"></div>
-          <div class="c-swatch" data-color="#FACC15" style="background:#FACC15;"></div>
-          <div class="c-swatch" data-color="#A855F7" style="background:#A855F7;"></div>
-          <input type="color" id="color-picker" style="border:none;width:20px;height:20px;cursor:pointer;padding:0;background:none;">
-          <div class="range-wrap"><label style="font-size:11px;color:var(--text-secondary);">Dimensione</label><input type="range" id="brush-size" min="2" max="40" value="8" class="c-range"></div>
-          <button id="btn-undo" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border-subtle);color:var(--text-primary);background:transparent;cursor:pointer;">Annulla</button>
-          <button id="btn-clear" style="padding:4px 8px;border-radius:4px;border:1px solid var(--status-alert);color:var(--status-alert);background:transparent;cursor:pointer;">Pulisci</button>
-          <button id="save-png" style="padding:4px 8px;border-radius:4px;border:1px solid var(--accent-primary);color:var(--text-primary);background:transparent;cursor:pointer;">Salva PNG</button>
-          <button id="btn-load-png" style="padding:4px 8px;border-radius:4px;border:1px solid var(--accent-primary);color:var(--text-primary);background:transparent;cursor:pointer;">Carica PNG</button>
-          <input type="file" id="png-file" accept="image/*" style="display:none;">
-        </div>
-        <div class="panel-footer">
-          <div style="margin-bottom:8px;">
-            <div style="font-size:11px;color:var(--text-secondary);margin-bottom:6px;">Soglie</div>
-            <div class="range-wrap"><label style="font-size:11px;color:var(--text-secondary);">Occhi Aperti</label><input type="range" id="thresh-eye" min="0.1" max="0.9" step="0.05" value="0.3" class="c-range"><span class="val" id="val-eye">0.30</span></div>
-            <div class="range-wrap"><label style="font-size:11px;color:var(--text-secondary);">Bocca Aperta</label><input type="range" id="thresh-mouth" min="0.1" max="0.9" step="0.05" value="0.3" class="c-range"><span class="val" id="val-mouth">0.30</span></div>
-            <div class="range-wrap"><label style="font-size:11px;color:var(--text-secondary);">Sensibilità Testa</label><input type="range" id="thresh-head" min="0.5" max="2.0" step="0.1" value="1.0" class="c-range"><span class="val" id="val-head">1.0</span></div>
-          </div>
-          <button id="btn-apply" class="btn-wide">Applica all'Avatar Live</button>
-          <div class="row-del" style="display:flex;gap:8px;">
-            <button id="btn-export" style="flex:1;padding:6px;border:none;border-radius:6px;background:#212530;color:var(--text-primary);cursor:pointer;">Esporta JSON</button>
-            <button id="btn-import" style="flex:1;padding:6px;border:none;border-radius:6px;background:#212530;color:var(--text-primary);cursor:pointer;">Importa JSON</button>
-            <input type="file" id="json-import" accept=".json" style="display:none;">
-          </div>
-        </div>
-      </div>
-    </div>
+<header><div class="logo">D-AVATAR LIVE</div></header>
+<div class="main">
+  <div class="stage">
+    <canvas id="canvas"></canvas>
+    <video id="webcam" muted playsinline style="display:none;"></video>
+    <canvas id="pip" width="220" height="165"></canvas>
   </div>
 </div>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1650995939/hands.js"></script>
-<script src="webcam_avatar.js"></script>
+<div class="controls">
+  <button id="btnCam" class="btn">ATTIVA CAMERA</button>
+  <button id="btnTest" class="btn danger">Test Webcam</button>
+</div>
+<div class="status"><div id="dot" class="dot"></div><span id="statusText">CAM: NON AVVIATA</span></div>
+<div class="error" id="errBox">
+  <b id="errTitle">Errore</b>
+  <div class="hint" id="errHint"></div>
+  <button class="close" id="errClose">Chiudi</button>
+</div>
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const video = document.getElementById('webcam');
+const pip = document.getElementById('pip');
+const pipCtx = pip.getContext('2d');
+const btnCam = document.getElementById('btnCam');
+const btnTest = document.getElementById('btnTest');
+const errBox = document.getElementById('errBox');
+const errTitle = document.getElementById('errTitle');
+const errHint = document.getElementById('errHint');
+const errClose = document.getElementById('errClose');
+const dot = document.getElementById('dot');
+const statusText = document.getElementById('statusText');
+
+let stream = null;
+let cameraOn = false;
+let breathing = 0;
+
+function showError(title, hint) {
+  errTitle.textContent = title;
+  errHint.textContent = hint;
+  errBox.style.display = 'block';
+  dot.classList.remove('ok');
+  statusText.textContent = 'CAM: ERRORE';
+}
+
+function hideError() {
+  errBox.style.display = 'none';
+}
+
+function setOk() {
+  dot.classList.add('ok');
+  statusText.textContent = 'CAM: OK';
+}
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.min(window.innerWidth * 0.95, 900);
+  const h = Math.min(window.innerHeight * 0.8, 700);
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+async function startCamera() {
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+    stream = s;
+    video.srcObject = s;
+    await new Promise(r => (video.onloadedmetadata = r));
+    video.play();
+    cameraOn = true;
+    btnCam.textContent = 'SPEGNI CAMERA';
+    btnCam.classList.add('danger');
+    hideError();
+    setOk();
+    requestAnimationFrame(tick);
+  } catch (e) {
+    cameraOn = false;
+    showError(
+      'Webcam non attivata',
+      e.message + '\n\nCosa fare:\n1. Clicca l\'icona lucchetto 🔒 nella barra indirizzi e imposta Fotocamera su Consenti.\n2. Ricarica la pagina.\n3. Usa http://127.0.0.1:8000/webcam_avatar.html (NON doppio clic sul file).\n4. Chiudi altre app che usano la webcam.'
+    );
+  }
+}
+
+async function testCamera() {
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+    s.getTracks().forEach(t => t.stop());
+    showError('Webcam FUNZIONA', 'Il permesso è stato concesso. Clicca ATTIVA CAMERA per usarla.');
+    dot.classList.add('ok');
+    statusText.textContent = 'CAM: OK';
+  } catch (e) {
+    showError('Webcam NON RAGGIUNGIBILE', e.message);
+  }
+}
+
+function drawAvatar() {
+  const w = canvas.width / (window.devicePixelRatio || 1);
+  const h = canvas.height / (window.devicePixelRatio || 1);
+  breathing += 0.02;
+  const cx = w / 2;
+  const cy = h / 2 + Math.sin(breathing) * 3;
+
+  ctx.clearRect(0, 0, w, h);
+
+  // Testa
+  ctx.fillStyle = '#FDBA74';
+  ctx.beginPath();
+  ctx.arc(cx, cy - 10, 100, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#111827';
+  ctx.lineWidth = 4;
+  ctx.stroke();
+
+  // Occhi
+  ctx.fillStyle = '#FFFFFF';
+  ctx.beginPath();
+  ctx.arc(cx - 35, cy - 20, 16, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx + 35, cy - 20, 16, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#06B6D4';
+  ctx.beginPath();
+  ctx.arc(cx - 35, cy - 20, 8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx + 35, cy - 20, 8, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Bocca
+  ctx.fillStyle = '#F472B6';
+  ctx.beginPath();
+  ctx.arc(cx, cy + 20, 20, 0, Math.PI);
+  ctx.fill();
+}
+
+function tick() {
+  if (cameraOn && video.readyState >= 2) {
+    const w = canvas.width / (window.devicePixelRatio || 1);
+    const h = canvas.height / (window.devicePixelRatio || 1);
+    ctx.drawImage(video, 0, 0, w, h);
+    pipCtx.drawImage(video, 0, 0, pip.width, pip.height);
+  } else {
+    drawAvatar();
+  }
+  requestAnimationFrame(tick);
+}
+
+btnCam.addEventListener('click', startCamera);
+btnTest.addEventListener('click', testCamera);
+errClose.addEventListener('click', hideError);
+
+drawAvatar();
+requestAnimationFrame(tick);
+</script>
 </body>
 </html>
