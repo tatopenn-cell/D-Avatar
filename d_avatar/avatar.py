@@ -8,10 +8,6 @@ Optional extras beyond the base 7 parameters:
 - ``smile`` (0, 1): corners of the mouth pulled up (0 = neutral, 1 = smile)
 - ``time`` (float): seconds, used for automatic blinking when ``blink`` is
   absent or 0
-- ``style`` (dict): custom BGR colors. Keys: ``skin_color``, ``skin_dark``,
-  ``skin_light``, ``hair_color``, ``hair_light``, ``brow_color``,
-  ``mouth_inside``, ``mouth_outline``, ``lip_color``, ``eye_color``,
-  ``pupil_color``, ``eye_reflect``, ``eye_closed``.
 
 Uses OpenCV only inside this module (optional extra, per SKILL.md).
 """
@@ -105,9 +101,7 @@ def _auto_blink(time_s: float, last_blink: list[float]) -> float:
 
 
 def draw_avatar(  # noqa: PLR0915
-    params: dict[str, Any] | None,
-    size: int = 400,
-    style: dict[str, Any] | None = None,
+    params: dict[str, Any] | None, size: int = 400
 ) -> np.ndarray:
     """Draw a 2D avatar from parameters.
 
@@ -120,12 +114,6 @@ def draw_avatar(  # noqa: PLR0915
             (0, 1), gaze_x, gaze_y (-1, 1), smile (0, 1), time (seconds).
             Missing keys use neutral values.
         size: output image size in pixels (default 400).
-        style: optional dict with custom colors. Keys:
-            ``skin_color``, ``skin_dark``, ``skin_light``,
-            ``hair_color``, ``hair_light``, ``brow_color``,
-            ``mouth_inside``, ``mouth_outline``, ``lip_color``,
-            ``eye_color``, ``pupil_color``, ``eye_reflect``,
-            ``eye_closed``. Values are BGR tuples or lists.
 
     Returns:
         BGR uint8 array of shape (size, size, 3).
@@ -136,25 +124,6 @@ def draw_avatar(  # noqa: PLR0915
         )
 
     p = params or {}
-    style = style or {}
-
-    def _col(key: str, default: tuple[int, int, int]) -> tuple[int, int, int]:
-        v = style.get(key, default)
-        return (int(v[0]), int(v[1]), int(v[2]))
-
-    skin = _col('skin_color', _SKIN)
-    skin_dark = _col('skin_dark', _SKIN_DARK)
-    skin_light = _col('skin_light', _SKIN_LIGHT)
-    hair_color = _col('hair_color', _HAIR_COLOR)
-    hair_light = _col('hair_light', _HAIR_LIGHT)
-    brow_color = _col('brow_color', _BROW_COLOR)
-    mouth_inside = _col('mouth_inside', _MOUTH_INSIDE)
-    mouth_outline = _col('mouth_outline', _MOUTH_OUTLINE)
-    lip_color = _col('lip_color', _LIP_COLOR)
-    iris_color = _col('eye_color', _IRIS_COLOR)
-    pupil_color = _col('pupil_color', _PUPIL_COLOR)
-    eye_reflect = _col('eye_reflect', _EYE_REFLECT_COLOR)
-    eye_closed = _col('eye_closed', _EYE_CLOSED_COLOR)
 
     head_yaw = _get(p, 'head_yaw', 0.0)
     head_pitch = _get(p, 'head_pitch', 0.0)
@@ -216,14 +185,14 @@ def draw_avatar(  # noqa: PLR0915
         img,
         (neck_x, neck_y),
         (neck_x + neck_w, neck_y + neck_h),
-        skin_dark,
+        _SKIN_DARK,
         1,
     )
 
     # ---------------------------------------------------------------- head
     ax = int(_scale(120, size))
     ay = int(_scale(150, size))
-    cv2.ellipse(img, C, (ax, ay), head_roll, 0, 360, skin, -1)
+    cv2.ellipse(img, C, (ax, ay), head_roll, 0, 360, _SKIN, -1)
     cv2.ellipse(img, C, (ax, ay), head_roll, 0, 360, (0, 0, 0), 2)
 
     # ---------------------------------------------------------------- hair
@@ -238,7 +207,7 @@ def draw_avatar(  # noqa: PLR0915
         head_roll,
         180,
         360,
-        hair_color,
+        _HAIR_COLOR,
         -1,
     )
     # Hair bangs / fringe across forehead.
@@ -252,7 +221,7 @@ def draw_avatar(  # noqa: PLR0915
             head_roll + i * 8,
             180,
             360,
-            hair_color,
+            _HAIR_COLOR,
             -1,
         )
     # Hair light highlight (left side).
@@ -264,7 +233,7 @@ def draw_avatar(  # noqa: PLR0915
         head_roll,
         0,
         180,
-        hair_light,
+        _HAIR_LIGHT,
         -1,
     )
 
@@ -287,7 +256,7 @@ def draw_avatar(  # noqa: PLR0915
     ear_ay = int(_scale(28, size))
     for ex in (_CENTER[0] - 122, _CENTER[0] + 122):
         ear_c = _point((ex, _CENTER[1]), size)
-        cv2.ellipse(img, ear_c, (ear_ax, ear_ay), head_roll, 0, 360, skin, -1)
+        cv2.ellipse(img, ear_c, (ear_ax, ear_ay), head_roll, 0, 360, _SKIN, -1)
         cv2.ellipse(img, ear_c, (ear_ax, ear_ay), head_roll, 0, 360, (0, 0, 0), 1)
 
     # ---------------------------------------------------------------- eyes
@@ -304,7 +273,7 @@ def draw_avatar(  # noqa: PLR0915
                 img,
                 (ec[0] - eax, ec[1]),
                 (ec[0] + eax, ec[1]),
-                eye_closed,
+                _EYE_CLOSED_COLOR,
                 3,
             )
         else:
@@ -315,15 +284,15 @@ def draw_avatar(  # noqa: PLR0915
                 ec[0] + int(gaze_x * 12 * s),
                 ec[1] + int(gaze_y * 6 * s),
             )
-            cv2.circle(img, iris_c, 10, iris_color, -1)
-            cv2.circle(img, iris_c, 4, pupil_color, -1)
+            cv2.circle(img, iris_c, 10, _IRIS_COLOR, -1)
+            cv2.circle(img, iris_c, 4, _PUPIL_COLOR, -1)
             # Eye reflection (catchlight).
             refl = (iris_c[0] - 3, iris_c[1] - 3)
-            cv2.circle(img, refl, 3, eye_reflect, -1)
+            cv2.circle(img, refl, 3, _EYE_REFLECT_COLOR, -1)
             # Upper lid shadow line.
             lid_top = (ec[0] - eax, ec[1] - eay + 2)
             lid_end = (ec[0] + eax, ec[1] - eay + 2)
-            cv2.line(img, lid_top, lid_end, eye_closed, 1)
+            cv2.line(img, lid_top, lid_end, _EYE_CLOSED_COLOR, 1)
 
     # ---------------------------------------------------------------- eyebrows
     for _name, b, base_x in (
@@ -338,9 +307,9 @@ def draw_avatar(  # noqa: PLR0915
         dy = int(length / 2 * np.sin(np.radians(angle)))
         p1 = (brow_c[0] - dx, brow_c[1] - dy)
         p2 = (brow_c[0] + dx, brow_c[1] + dy)
-        cv2.line(img, p1, p2, brow_color, th)
+        cv2.line(img, p1, p2, _BROW_COLOR, th)
         # Brow highlight (subtle).
-        cv2.line(img, p1, p2, skin_light, 1)
+        cv2.line(img, p1, p2, _SKIN_LIGHT, 1)
 
     # ---------------------------------------------------------------- nose
     nose_c = feat_center((_CENTER[0], _CENTER[1] - 5))
@@ -351,8 +320,8 @@ def draw_avatar(  # noqa: PLR0915
             feat_center((_CENTER[0] + 14, _CENTER[1] + 35)),
         ]
     )
-    cv2.fillConvexPoly(img, pts, skin_dark)
-    cv2.polylines(img, [pts], True, skin_dark, 1)
+    cv2.fillConvexPoly(img, pts, _SKIN_DARK)
+    cv2.polylines(img, [pts], True, _SKIN_DARK, 1)
     # Nostrils.
     nl = feat_center((_CENTER[0] - 8, _CENTER[1] + 28))
     nr = feat_center((_CENTER[0] + 8, _CENTER[1] + 28))
@@ -372,7 +341,7 @@ def draw_avatar(  # noqa: PLR0915
             img,
             (mouth_c[0] - m_ax, mc_y),
             (mouth_c[0] + m_ax, mc_y + int(smile * 6 * s)),
-            mouth_outline,
+            _MOUTH_OUTLINE,
             2,
         )
     else:
@@ -384,7 +353,7 @@ def draw_avatar(  # noqa: PLR0915
             head_roll,
             0,
             360,
-            mouth_inside,
+            _MOUTH_INSIDE,
             -1,
         )
         cv2.ellipse(
@@ -394,7 +363,7 @@ def draw_avatar(  # noqa: PLR0915
             head_roll,
             0,
             360,
-            mouth_outline,
+            _MOUTH_OUTLINE,
             2,
         )
         # Lips: darker outline.
@@ -406,7 +375,7 @@ def draw_avatar(  # noqa: PLR0915
             head_roll,
             0,
             360,
-            lip_color,
+            _LIP_COLOR,
             -1,
         )
 
