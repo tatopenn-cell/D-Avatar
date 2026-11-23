@@ -62,6 +62,8 @@ function init() {
   els.pip = $('pip-cam');
   els.pipCtx = els.pip.getContext('2d');
   els.live2dCanvas = $('live2d-canvas');
+  els.fxCanvas = $('fx-canvas');
+  els.fxCtx = els.fxCanvas.getContext('2d');
   els.faceBadge = $('badge-face');
   els.handBadge = $('badge-hand');
   els.fpsBadge = $('badge-fps');
@@ -138,6 +140,13 @@ function resizeCanvases() {
     els.live2dCanvas.height = h * dpr;
     els.live2dCanvas.style.width = w + 'px';
     els.live2dCanvas.style.height = h + 'px';
+  }
+  // Ridimensiona canvas effetti
+  if (els.fxCanvas) {
+    els.fxCanvas.width = w * dpr;
+    els.fxCanvas.height = h * dpr;
+    els.fxCanvas.style.width = w + 'px';
+    els.fxCanvas.style.height = h + 'px';
   }
 }
 
@@ -465,123 +474,165 @@ function drawSyntheticPlaceholder(ctx, w, h) {
   ctx.fillText('Usa i controlli a destra per disegnare', w / 2, h / 2 + 5);
 }
 
-/* ---------- Effetti TikTok ---------- */
+/* ---------- Effetti TikTok sul volto (basati su Face Mesh landmark) ---------- */
+function getFaceBox(lm, w, h) {
+  if (!lm || !lm.multiFaceLandmarks || lm.multiFaceLandmarks.length === 0) return null;
+  const face = lm.multiFaceLandmarks[0];
+  // Landmark del contorno viso (oval): 10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109
+  const idx = [10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109];
+  let minX=1,minY=1,maxX=0,maxY=0;
+  idx.forEach(i=>{
+    const p=face[i];
+    if(p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x;
+    if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y;
+  });
+  const pad=0.15;
+  const bw=(maxX-minX), bh=(maxY-minY);
+  return {
+    x:Math.max(0,minX-bpad)*w,
+    y:Math.max(0,minY-bpad)*h,
+    w:Math.min(1,maxX+bpad)*w - Math.max(0,minX-bpad)*w,
+    h:Math.min(1,maxY+bpad)*h - Math.max(0,minY-bpad)*h,
+    cx:(minX+maxX)/2*w,
+    cy:(minY+maxY)/2*h,
+  };
+}
+const bpad=0.15;
+
+function drawEyeOverlay(ctx, cx, cy, r, color='#00FF00') {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.strokeStyle=color; ctx.lineWidth=4;
+  ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(0,0,r*0.6,0,Math.PI*2); ctx.stroke();
+  ctx.restore();
+}
+
 function applyEffect(ctx, w, h) {
   const eff = state.currentEffect;
   if (eff === 'none') return;
 
+  const lm = state.faceLandmarks;
+  const box = lm ? getFaceBox(lm, w, h) : null;
+
   ctx.save();
 
+  // Effetti filtro: prima disegno il video sul canvas effetti
+  const filterEffects = ['mirror','pixelate','sepia','invert','blur','glitch'];
+  if (filterEffects.includes(eff) && box) {
+    ctx.drawImage(els.video, box.x, box.y, box.w, box.h, box.x, box.y, box.w, box.h);
+  }
+
   if (eff === 'mirror') {
-    ctx.translate(w, 0);
-    ctx.scale(-1, 1);
-    ctx.drawImage(els.video, 0, 0, w, h);
+    if (box) {
+      ctx.translate(box.x + box.w, box.y);
+      ctx.scale(-1, 1);
+      ctx.drawImage(els.video, box.x, box.y, box.w, box.h, 0, 0, box.w, box.h);
+    }
     ctx.restore();
     return;
   }
 
-  if (eff === 'pixelate') {
-    const px = 12;
-    for (let y = 0; y < h; y += px) {
-      for (let x = 0; x < w; x += px) {
-        const p = ctx.getImageData(x, y, 1, 1).data;
+  if (eff === 'pixelate' && box) {
+    const px = 14;
+    const cols = Math.ceil(box.w/px), rows = Math.ceil(box.h/px);
+    for (let ry=0; ry<rows; ry++) {
+      for (let rx=0; rx<cols; rx++) {
+        const sx = box.x + rx*px;
+        const sy = box.y + ry*px;
+        const pw = Math.min(px, box.w - rx*px);
+        const ph = Math.min(px, box.h - ry*px);
+        const p = ctx.getImageData(sx, sy, 1, 1).data;
         ctx.fillStyle = `rgb(${p[0]},${p[1]},${p[2]})`;
-        ctx.fillRect(x, y, px, px);
+        ctx.fillRect(sx, sy, pw, ph);
       }
     }
     ctx.restore();
     return;
   }
 
-  if (eff === 'sepia') {
-    const imgData = ctx.getImageData(0, 0, w, h);
+  if (eff === 'sepia' && box) {
+    const imgData = ctx.getImageData(box.x, box.y, box.w, box.h);
     const d = imgData.data;
-    for (let i = 0; i < d.length; i += 4) {
-      const r = d[i], g = d[i+1], b = d[i+2];
-      d[i]   = Math.min(255, (r * 0.393) + (g * 0.769) + (b * 0.189));
-      d[i+1] = Math.min(255, (r * 0.349) + (g * 0.686) + (b * 0.168));
-      d[i+2] = Math.min(255, (r * 0.272) + (g * 0.534) + (b * 0.131));
+    for (let i=0; i<d.length; i+=4) {
+      const r=d[i], g=d[i+1], b=d[i+2];
+      d[i]=Math.min(255,(r*0.393)+(g*0.769)+(b*0.189));
+      d[i+1]=Math.min(255,(r*0.349)+(g*0.686)+(b*0.168));
+      d[i+2]=Math.min(255,(r*0.272)+(g*0.534)+(b*0.131));
     }
-    ctx.putImageData(imgData, 0, 0);
+    ctx.putImageData(imgData, box.x, box.y);
     ctx.restore();
     return;
   }
 
-  if (eff === 'invert') {
-    const imgData = ctx.getImageData(0, 0, w, h);
+  if (eff === 'invert' && box) {
+    const imgData = ctx.getImageData(box.x, box.y, box.w, box.h);
     const d = imgData.data;
-    for (let i = 0; i < d.length; i += 4) {
-      d[i]   = 255 - d[i];
-      d[i+1] = 255 - d[i+1];
-      d[i+2] = 255 - d[i+2];
+    for (let i=0; i<d.length; i+=4) {
+      d[i]=255-d[i]; d[i+1]=255-d[i+1]; d[i+2]=255-d[i+2];
     }
-    ctx.putImageData(imgData, 0, 0);
+    ctx.putImageData(imgData, box.x, box.y);
     ctx.restore();
     return;
   }
 
-  if (eff === 'blur') {
-    ctx.filter = 'blur(8px)';
-    ctx.drawImage(els.video, 0, 0, w, h);
-    ctx.filter = 'none';
+  if (eff === 'blur' && box) {
+    ctx.filter='blur(10px)';
+    ctx.drawImage(els.video, box.x, box.y, box.w, box.h, box.x, box.y, box.w, box.h);
+    ctx.filter='none';
     ctx.restore();
     return;
   }
 
-  if (eff === 'glitch') {
-    const t = Date.now() * 0.002;
-    const offset = Math.sin(t * 5) * 10;
-    ctx.drawImage(els.video, offset, 0, w, h);
-    ctx.drawImage(els.video, -offset, 20, w, h);
-    ctx.fillStyle = 'rgba(255,0,0,0.15)';
-    ctx.fillRect(0, 0, w, h);
+  if (eff === 'glitch' && box) {
+    const t=Date.now()*0.002;
+    const offset=Math.sin(t*6)*12;
+    ctx.drawImage(els.video, box.x+offset, box.y, box.w, box.h, box.x, box.y, box.w, box.h);
+    ctx.drawImage(els.video, box.x-offset, box.y+15, box.w, box.h, box.x, box.y+15, box.w, box.h);
+    ctx.fillStyle='rgba(255,0,0,0.15)';
+    ctx.fillRect(box.x, box.y, box.w, box.h);
     ctx.restore();
     return;
   }
+
+  // Effetti overlay (disegnati sopra il video già presente)
+  if (!box) { ctx.restore(); return; }
+
+  const {cx, cy} = box;
+  const faceW = box.w, faceH = box.h;
 
   if (eff === 'cry') {
-    // Lacrime sul viso (posizione approssimativa centro)
-    ctx.fillStyle = '#06B6D4';
-    const cx = w / 2, cy = h / 2;
-    for (let i = 0; i < 4; i++) {
-      const tx = cx + Math.sin(Date.now() * 0.005 + i) * 40;
-      const ty = cy - 20 + (i * 15) + (Math.sin(Date.now() * 0.003 + i) * 5);
-      ctx.beginPath();
-      ctx.arc(tx, ty, 6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.moveTo(tx, ty + 6);
-      ctx.lineTo(tx, ty + 14);
-      ctx.strokeStyle = '#06B6D4';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
+    ctx.fillStyle='#06B6D4';
+    const t=Date.now();
+    const eyeL = lm.multiFaceLandmarks[0][33];
+    const eyeR = lm.multiFaceLandmarks[0][263];
+    [eyeL, eyeR].forEach((e, idx) => {
+      const ex = e.x*w, ey = e.y*h;
+      for (let i=0; i<3; i++) {
+        const tx = ex + (idx===0?-8:8) + Math.sin(t*0.005+idx+i)*6;
+        const ty = ey + 10 + (i*14) + Math.sin(t*0.003+idx+i)*4;
+        ctx.beginPath(); ctx.arc(tx, ty, 5, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(tx, ty+5); ctx.lineTo(tx, ty+11);
+        ctx.strokeStyle='#06B6D4'; ctx.lineWidth=2; ctx.stroke();
+      }
+    });
     ctx.restore();
     return;
   }
 
   if (eff === 'bigeyes') {
-    // Cerchi grandi sugli occhi (posizione approssimativa)
-    ctx.strokeStyle = '#00FF00';
-    ctx.lineWidth = 4;
-    const cx = w / 2;
-    ctx.beginPath();
-    ctx.arc(cx - 80, h / 2 - 40, 35, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(cx + 80, h / 2 - 40, 35, 0, Math.PI * 2);
-    ctx.stroke();
+    const r = faceW * 0.18;
+    const eyeL = lm.multiFaceLandmarks[0][33];
+    const eyeR = lm.multiFaceLandmarks[0][263];
+    drawEyeOverlay(ctx, eyeL.x*w, eyeL.y*h, r);
+    drawEyeOverlay(ctx, eyeR.x*w, eyeR.y*h, r);
     ctx.restore();
     return;
   }
 
   if (eff === 'bighead') {
-    // Cornice grande intorno alla testa
-    ctx.strokeStyle = '#FF00FF';
-    ctx.lineWidth = 6;
-    ctx.beginPath();
-    ctx.arc(w / 2, h / 2 - 30, 120, 0, Math.PI * 2);
-    ctx.stroke();
+    ctx.strokeStyle='#FF00FF'; ctx.lineWidth=6;
+    ctx.beginPath(); ctx.arc(cx, cy - faceH*0.1, faceW*0.65, 0, Math.PI*2); ctx.stroke();
     ctx.restore();
     return;
   }
@@ -888,7 +939,10 @@ function tick(now) {
   if (state.cameraAvailable && els.video && els.video.readyState >= 2) {
     ctx.drawImage(els.video, 0, 0, w, h);
     els.pipCtx.drawImage(els.video, 0, 0, els.pip.width, els.pip.height);
-    applyEffect(ctx, w, h);
+
+    // Effetti sul canvas sopra il Live2D
+    els.fxCtx.clearRect(0, 0, w, h);
+    applyEffect(els.fxCtx, w, h);
 
     // Invia frame a MediaPipe Face Mesh + Hands
     if (state.faceMesh && els.video.readyState >= 2) {
