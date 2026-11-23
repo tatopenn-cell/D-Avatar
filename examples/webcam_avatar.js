@@ -449,6 +449,21 @@ function initEvents() {
     await retryHands();
   });
 
+  // Build pipeline RealtimePipeline via API Dense-Armor
+  $('btn-pipeline').addEventListener('click', async () => {
+    try {
+      const r = await fetch('http://127.0.0.1:5000/pipeline/build', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({period_s: 0.05, max_step: 0.1, max_step_deg: 5.0})
+      });
+      const data = await r.json();
+      showCameraError('Pipeline costruita: ' + JSON.stringify(data), true);
+    } catch (e) {
+      showCameraError('Errore pipeline: ' + e.message, false);
+    }
+  });
+
   // Tracciamento mano sintetico (fallback quando MediaPipe non è disponibile)
   els.canvas.addEventListener('mousemove', (e) => {
     const rect = els.canvas.getBoundingClientRect();
