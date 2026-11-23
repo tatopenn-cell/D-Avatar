@@ -1,4 +1,4 @@
-/* D-Avatar Studio — Live Input. Webcam + Face Mesh + Lip-sync + disegno + mani. */
+/* D-Avatar Studio — Live Input. Webcam + Live2D + Face Mesh + Lip-sync + disegno + mani. */
 
 const state = {
   cameraOn: false,
@@ -29,6 +29,10 @@ const state = {
   micData: null,
   micReady: false,
   mouthOpenByAudio: 0,
+  // Live2D
+  live2dApp: null,
+  live2dModel: null,
+  live2dReady: false,
   // Parametri API Dense-Armor (opzionali)
   apiParams: {},
   lastApiSend: 0,
@@ -38,7 +42,7 @@ const els = {};
 function $(id) { return document.getElementById(id); }
 
 function init() {
-  const required = ['main-canvas','draw-canvas','webcam-video','pip-cam','badge-face','badge-hand','badge-fps','badge-mic','crosshair','avatar-svg'];
+  const required = ['main-canvas','draw-canvas','webcam-video','pip-cam','badge-face','badge-hand','badge-fps','badge-mic','badge-live2d','crosshair','live2d-canvas'];
   for (const id of required) {
     if (!document.getElementById(id)) {
       const msg = document.createElement('div');
@@ -55,32 +59,14 @@ function init() {
   els.video = $('webcam-video');
   els.pip = $('pip-cam');
   els.pipCtx = els.pip.getContext('2d');
+  els.live2dCanvas = $('live2d-canvas');
   els.faceBadge = $('badge-face');
   els.handBadge = $('badge-hand');
   els.fpsBadge = $('badge-fps');
   els.micBadge = $('badge-mic');
+  els.live2dBadge = $('badge-live2d');
   els.crosshair = $('crosshair');
   state.dctx = els.dctx;
-
-  // Riferimenti SVG livelli avatar
-  state.svg = {
-    head: $('#svg-head'),
-    neck: $('#svg-neck'),
-    hair: $('#svg-hair'),
-    brows: $('#svg-brows'),
-    browL: $('#brow-left'),
-    browR: $('#brow-right'),
-    eyes: $('#svg-eyes'),
-    eyeL: $('#eye-left'),
-    eyeR: $('#eye-right'),
-    pupilL: $('#pupil-left'),
-    pupilR: $('#pupil-right'),
-    nose: $('#svg-nose'),
-    mouth: $('#svg-mouth'),
-    mouthLip: $('#mouth-lip'),
-    mouthInside: $('#mouth-inside'),
-    outline: $('#svg-outline'),
-  };
 
   initLayers();
   initEvents();
@@ -88,6 +74,7 @@ function init() {
   window.addEventListener('resize', resizeCanvases);
 
   initMic();
+  initLive2D();
 
   startWebcam().then(() => {
     requestAnimationFrame(tick);
@@ -118,54 +105,6 @@ function initLayers() {
     c.height = els.draw.height;
     state.layers[name] = { canvas: c, ctx: c.getContext('2d') };
   });
-  drawDefaultFace();
-}
-
-function drawDefaultFace() {
-  const l = state.layers;
-  const c = l.head.ctx;
-  c.fillStyle = '#FDBA74';
-  c.beginPath(); c.arc(150, 150, 110, 0, Math.PI * 2); c.fill();
-  c.strokeStyle = '#111827'; c.lineWidth = 4; c.stroke();
-  c.fillStyle = '#FFFFFF';
-  c.beginPath(); c.arc(115, 130, 22, 0, Math.PI * 2); c.fill();
-  c.beginPath(); c.arc(185, 130, 22, 0, Math.PI * 2); c.fill();
-  c.fillStyle = '#06B6D4';
-  c.beginPath(); c.arc(115, 130, 10, 0, Math.PI * 2); c.fill();
-  c.beginPath(); c.arc(185, 130, 10, 0, Math.PI * 2); c.fill();
-  c.fillStyle = '#F472B6';
-  c.beginPath(); c.arc(150, 180, 25, 0, Math.PI); c.fill();
-
-  const ec = l['eyes-closed'].ctx;
-  ec.fillStyle = '#FFFFFF';
-  ec.beginPath(); ec.arc(115, 130, 22, 0, Math.PI * 2); ec.fill();
-  ec.beginPath(); ec.arc(185, 130, 22, 0, Math.PI * 2); ec.fill();
-  ec.strokeStyle = '#111827'; ec.lineWidth = 4;
-  ec.beginPath(); ec.moveTo(93, 130); ec.lineTo(137, 130); ec.stroke();
-  ec.beginPath(); ec.moveTo(163, 130); ec.lineTo(207, 130); ec.stroke();
-
-  const mo = l['mouth-open'].ctx;
-  mo.fillStyle = '#7F1D1D';
-  mo.beginPath(); mo.arc(150, 185, 28, 0, Math.PI * 2); mo.fill();
-  mo.fillStyle = '#FFFFFF';
-  mo.fillRect(138, 175, 10, 12);
-  mo.fillRect(152, 175, 10, 12);
-
-  const mc = l['mouth-closed'].ctx;
-  mc.fillStyle = '#F472B6';
-  mc.beginPath(); mc.arc(150, 180, 25, 0, Math.PI); mc.fill();
-
-  const hd = l['hand-default'].ctx;
-  hd.fillStyle = '#FDBA74';
-  hd.beginPath(); hd.arc(150, 150, 24, 0, Math.PI * 2); hd.fill();
-  hd.strokeStyle = '#111827'; hd.lineWidth = 3; hd.stroke();
-
-  const hh = l['hand-horns'].ctx;
-  hh.fillStyle = '#FDBA74';
-  hh.beginPath(); hh.arc(150, 150, 24, 0, Math.PI * 2); hh.fill();
-  hh.strokeStyle = '#EF4444'; hh.lineWidth = 6;
-  hh.beginPath(); hh.moveTo(150, 150); hh.lineTo(150, 90); hh.stroke();
-  hh.beginPath(); hh.moveTo(150, 150); hh.lineTo(190, 90); hh.stroke();
 }
 
 function resizeCanvases() {
@@ -190,6 +129,14 @@ function resizeCanvases() {
   state.dctx.lineWidth = saved.lineWidth;
   state.dctx.lineCap = saved.lineCap;
   state.dctx.lineJoin = saved.lineJoin;
+
+  // Ridimensiona Live2D canvas
+  if (els.live2dCanvas) {
+    els.live2dCanvas.width = w * dpr;
+    els.live2dCanvas.height = h * dpr;
+    els.live2dCanvas.style.width = w + 'px';
+    els.live2dCanvas.style.height = h + 'px';
+  }
 }
 
 /* ---------- Webcam ---------- */
@@ -248,8 +195,114 @@ function getMicVolume() {
   let sum = 0;
   for (let i = 0; i < state.micData.length; i++) sum += state.micData[i];
   const avg = sum / state.micData.length;
-  // Normalizza 0-255 -> 0-1 circa
   return Math.min(1, avg / 120);
+}
+
+/* ---------- Live2D (pixi-live2d-display) ---------- */
+async function initLive2D() {
+  try {
+    if (!window.PIXI || !window.PIXI.Live2D) {
+      throw new Error('PixiJS / Live2D non caricati');
+    }
+    state.live2dApp = new PIXI.Application({
+      view: els.live2dCanvas,
+      resizeTo: window,
+      autoStart: true,
+      transparent: true,
+      backgroundAlpha: 0,
+    });
+    state.live2dApp.stage.removeChildren();
+
+    const model = await PIXI.Live2D.Model.from('modelli/hiyori/hiyori.model3.json');
+    state.live2dModel = model;
+    state.live2dApp.stage.addChild(model);
+
+    // Centra e scala il modello nello stage
+    const scale = 0.6;
+    model.scale.set(scale, scale);
+    model.position.set(
+      state.live2dApp.screen.width / 2,
+      state.live2dApp.screen.height / 2 + 40
+    );
+
+    state.live2dReady = true;
+    els.live2dBadge.textContent = 'LIVE2D: OK';
+    els.live2dBadge.className = 'pill-small pill-green';
+  } catch (e) {
+    console.warn('Impossibile caricare Live2D:', e);
+    state.live2dReady = false;
+    els.live2dBadge.textContent = 'LIVE2D: ERR';
+    els.live2dBadge.className = 'pill-small pill-red';
+  }
+}
+
+function setLive2DParam(paramId, value) {
+  if (!state.live2dReady || !state.live2dModel) return;
+  try {
+    const core = state.live2dModel.coreModel;
+    if (core && typeof core.setParameterValue === 'function') {
+      core.setParameterValue(paramId, value);
+      return;
+    }
+    if (typeof state.live2dModel.setParameterValue === 'function') {
+      state.live2dModel.setParameterValue(paramId, value);
+    }
+  } catch (e) {
+    // Ignora errori su parametri non esistenti nel modello
+  }
+}
+
+function applyFaceToLive2D(lm) {
+  if (!lm || !lm.multiFaceLandmarks || lm.multiFaceLandmarks.length === 0) return;
+  const face = lm.multiFaceLandmarks[0];
+
+  // Landmark chiave Face Mesh
+  const nose = face[1];
+  const chin = face[152];
+  const forehead = face[10];
+  const lipUp = face[13];
+  const lipDown = face[14];
+  const eyeL = face[33];
+  const eyeR = face[263];
+  const browL = face[105];
+  const browR = face[334];
+  const eyeTopL = face[159];
+  const eyeBotL = face[145];
+  const eyeTopR = face[386];
+  const eyeBotR = face[374];
+
+  // --- Testa: rotazione X/Y/Z ---
+  const faceCx = (eyeL.x + eyeR.x) / 2;
+  const faceCy = (eyeL.y + eyeR.y + nose.y + chin.y) / 4;
+  const yaw = (nose.x - faceCx) * 60;   // gradi ~±60
+  const pitch = (nose.y - faceCy) * 50; // gradi ~±50
+  const roll = 0;
+
+  setLive2DParam('ParamAngleX', yaw * 0.8);
+  setLive2DParam('ParamAngleY', pitch * 0.8);
+  setLive2DParam('ParamAngleZ', roll * 0.5);
+
+  // --- Occhi: apertura ---
+  const openL = Math.max(0, (eyeBotL.y - eyeTopL.y) / 0.015);
+  const openR = Math.max(0, (eyeBotR.y - eyeTopR.y) / 0.015);
+  const eyeOpenL = Math.min(1, openL * 2.5);
+  const eyeOpenR = Math.min(1, openR * 2.5);
+
+  setLive2DParam('ParamEyeLOpen', eyeOpenL);
+  setLive2DParam('ParamEyeROpen', eyeOpenR);
+
+  // --- Sopracciglia: alzate/abbassate ---
+  const browLift = (browL.y + browR.y) / 2 - (forehead.y + 0.02);
+  const browParam = Math.max(-1, Math.min(1, browLift * 40));
+  setLive2DParam('ParamBrowLY', browParam);
+  setLive2DParam('ParamBrowRY', browParam);
+
+  // --- Bocca: apertura (faccia + audio lip-sync) ---
+  const mouthDist = Math.max(0, lipDown.y - lipUp.y);
+  const mouthFromFace = Math.min(1, mouthDist / 0.04);
+  const mouthFromAudio = state.mouthOpenByAudio;
+  const mouthOpen = Math.max(mouthFromFace, mouthFromAudio);
+  setLive2DParam('ParamMouthOpenY', mouthOpen);
 }
 
 /* ---------- MediaPipe Hands ---------- */
@@ -265,12 +318,16 @@ function loadHandsScript() {
 
 async function initHands() {
   try {
-    if (!window.Hands) await loadHandsScript();
+    // Se il CDN è già stato caricato in precedenza, window.Hands esiste già
+    if (!window.Hands) {
+      await loadHandsScript();
+    }
     const Hands = window.Hands;
     if (!Hands) {
+      // CDN bloccato: non è un errore fatale, le mani restano disattivate
       state.hands = null;
       state.handsReady = false;
-      els.handBadge.textContent = 'HAND: --';
+      els.handBadge.textContent = 'HAND: N/D';
       els.handBadge.className = 'pill-small pill-red';
       return;
     }
@@ -290,7 +347,7 @@ async function initHands() {
     console.warn('Impossibile inizializzare MediaPipe Hands:', e);
     state.hands = null;
     state.handsReady = false;
-    els.handBadge.textContent = 'HAND: ERRORE';
+    els.handBadge.textContent = 'HAND: N/D';
     els.handBadge.className = 'pill-small pill-red';
   }
 }
@@ -332,7 +389,7 @@ async function initFaceMesh() {
     if (!FaceMesh) {
       state.faceMesh = null;
       state.faceReady = false;
-      els.faceBadge.textContent = 'FACE: --';
+      els.faceBadge.textContent = 'FACE: N/D';
       els.faceBadge.className = 'pill-small pill-red';
       return;
     }
@@ -353,7 +410,7 @@ async function initFaceMesh() {
     console.warn('Impossibile inizializzare MediaPipe Face Mesh:', e);
     state.faceMesh = null;
     state.faceReady = false;
-    els.faceBadge.textContent = 'FACE: ERRORE';
+    els.faceBadge.textContent = 'FACE: N/D';
     els.faceBadge.className = 'pill-small pill-red';
   }
 }
@@ -367,6 +424,43 @@ function onFaceResults(results) {
     els.faceBadge.textContent = 'FACE: --';
     els.faceBadge.className = 'pill-small pill-red';
   }
+}
+
+/* ---------- Disegno mani sintetico (fallback mouse) ---------- */
+function drawSyntheticHand(ctx, x, y, color = '#EF4444') {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(0.5, 0.5);
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.strokeStyle = color; ctx.fillStyle = color;
+  ctx.beginPath(); ctx.ellipse(0, 0, 22, 28, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  const fingers = [
+    { ang: -25, len: 26 },
+    { ang: -10, len: 34 },
+    { ang: 10, len: 34 },
+    { ang: 30, len: 30 },
+    { ang: 50, len: 26 },
+  ];
+  fingers.forEach(f => {
+    ctx.save(); ctx.rotate((f.ang * Math.PI) / 180);
+    ctx.beginPath(); ctx.moveTo(0, 2); ctx.lineTo(0, -f.len); ctx.stroke();
+    ctx.restore();
+  });
+  ctx.restore();
+}
+
+/* ---------- Placeholder sintetico quando non c'è webcam ---------- */
+function drawSyntheticPlaceholder(ctx, w, h) {
+  ctx.fillStyle = '#0a0a12';
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = '#262C3A';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(10, 10, w - 20, h - 20);
+  ctx.fillStyle = '#94A3B8';
+  ctx.font = '14px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Webcam non disponibile', w / 2, h / 2 - 20);
+  ctx.fillText('Usa i controlli a destra per disegnare', w / 2, h / 2 + 5);
 }
 
 /* ---------- Eventi ---------- */
@@ -568,7 +662,6 @@ function clearLayer(name) {
   const l = state.layers[name];
   if (l) {
     l.ctx.clearRect(0, 0, l.canvas.width, l.canvas.height);
-    if (name === 'head') drawDefaultFace();
   }
 }
 
@@ -635,159 +728,6 @@ function setBg(mode) {
   }
 }
 
-/* ---------- Avatar SVG (livelli separati, niente canvas primitivi) ---------- */
-function applyFaceToSVG(lm) {
-  if (!lm || !lm.multiFaceLandmarks || lm.multiFaceLandmarks.length === 0) return;
-  const face = lm.multiFaceLandmarks[0];
-
-  // Indici Face Mesh (approssimativi, validi per la mesh standard):
-  // 13 = labbro superiore centro, 14 = labbro inferiore centro (apertura bocca)
-  // 33 = angolo occhio sx, 263 = angolo occhio dx (giro testa)
-  // 1 = punta naso (riferimento testa), 10 = fronte, 152 = mento
-  const nose = face[1];
-  const chin = face[152];
-  const forehead = face[10];
-  const lipUp = face[13];
-  const lipDown = face[14];
-  const eyeL = face[33];
-  const eyeR = face[263];
-  const browL = face[105]; // sopracciglia sx
-  const browR = face[334]; // sopracciglia dx
-
-  // --- Testa: scala e rotazione basate su distanza naso-mento e fronte ---
-  const headHeight = chin.y - forehead.y;
-  const scale = 1 + (headHeight - 0.2) * 1.2; // normalizzazione approssimativa
-  const sx = Math.max(0.7, Math.min(1.4, scale));
-  const sy = Math.max(0.7, Math.min(1.4, scale));
-
-  // Rotazione testa (yaw/pitch) da posizione naso rispetto al centro della faccia
-  const faceCx = (eyeL.x + eyeR.x) / 2;
-  const faceCy = (eyeL.y + eyeR.y + nose.y + chin.y) / 4;
-  const dx = (nose.x - faceCx) * 120; // gradi max ~±60
-  const dy = (nose.y - faceCy) * 100;
-
-  const s = state.svg;
-  s.head.setAttribute('transform', `translate(320,240) scale(${sx},${sy}) rotate(${-dx * 0.6},0,0)`);
-  s.neck.setAttribute('transform', `translate(320,240) scale(${sx * 0.8},${sy * 0.8}) rotate(${-dy * 0.3},0,0)`);
-  s.hair.setAttribute('transform', `translate(320,240) scale(${sx * 1.05},${sy * 1.05})`);
-  s.outline.setAttribute('transform', `translate(320,240) scale(${sx * 1.03},${sy * 1.03}) rotate(${-dx * 0.5},0,0)`);
-
-  // --- Sopracciglia: alzate/abbassate in base a posizione landmarks ---
-  const browLift = (browL.y + browR.y) / 2 - (forehead.y + 0.02);
-  const browRot = browLift * 40;
-  s.browL.setAttribute('transform', `translate(-55 + ${-dx * 0.3},-35 + ${browRot}) rotate(${browRot * 0.3})`);
-  s.browR.setAttribute('transform', `translate(15 + ${-dx * 0.3},-35 + ${browRot}) rotate(${browRot * 0.3})`);
-
-  // --- Occhi: apertura in base alla distanza verticale palpebra ---
-  // Usiamo landmarks interni occhi (159 sx, 386 dx per palpebra superiore)
-  const eyeTopL = face[159];
-  const eyeBotL = face[145];
-  const eyeTopR = face[386];
-  const eyeBotR = face[374];
-  const openL = Math.max(0, (eyeBotL.y - eyeTopL.y) / 0.015); // ~0-1
-  const openR = Math.max(0, (eyeBotR.y - eyeTopR.y) / 0.015);
-  const scaleEyeL = Math.min(1, Math.max(0.1, openL * 2));
-  const scaleEyeR = Math.min(1, Math.max(0.1, openR * 2));
-
-  s.eyeL.setAttribute('transform', `translate(-58 + ${-dx * 0.2},-25 + ${dy * 0.2}) scale(1,${scaleEyeL})`);
-  s.eyeR.setAttribute('transform', `translate(58 + ${-dx * 0.2},-25 + ${dy * 0.2}) scale(1,${scaleEyeR})`);
-
-  // Pupille seguono sguardo (dx/dy naso)
-  const px = (nose.x - faceCx) * 60;
-  const py = (nose.y - faceCy) * 40;
-  s.pupilL.setAttribute('cx', px * 0.5);
-  s.pupilL.setAttribute('cy', py * 0.5);
-  s.pupilR.setAttribute('cx', px * 0.5);
-  s.pupilR.setAttribute('cy', py * 0.5);
-
-  // --- Bocca: apertura in base a distanza labbra + audio lip-sync ---
-  const mouthDist = Math.max(0, lipDown.y - lipUp.y);
-  const mouthFromFace = Math.min(1, mouthDist / 0.04);
-  const mouthFromAudio = state.mouthOpenByAudio;
-  const mouthOpen = Math.max(mouthFromFace, mouthFromAudio);
-
-  // Apertura bocca SVG: path si deforma verso il basso
-  const openH = mouthOpen * 20;
-  const d = `M-32,35 Q-16,${28 - openH * 0.5} 0,35 Q16,${28 - openH * 0.5} 32,35 Q16,${42 + openH} 0,35 Q-16,${42 + openH} -32,35`;
-  s.mouthLip.setAttribute('d', d);
-  s.mouthInside.setAttribute('d', `M-32,35 Q0,${55 + openH * 2} 32,35`);
-  s.mouthInside.setAttribute('opacity', Math.min(1, mouthOpen * 1.5));
-}
-
-function drawHandsSVG(ctx, w, h) {
-  if (!state.handLandmarks || !state.handLandmarks.multiHandLandmarks) {
-    // Fallback sintetico mouse
-    if (state.mouseHand.active && state.mouseHand.x != null) {
-      drawSyntheticHand(ctx, state.mouseHand.x, state.mouseHand.y);
-    }
-    return;
-  }
-
-  const dpr = window.devicePixelRatio || 1;
-  const cw = w / dpr, ch = h / dpr;
-
-  state.handLandmarks.multiHandLandmarks.forEach(lm => {
-    // Usiamo landmark 0 (polso) come riferimento della mano
-    const x = (1 - lm[0].x) * cw;
-    const y = lm[0].y * ch;
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.scale(0.6, 0.6);
-    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-    ctx.strokeStyle = '#EF4444'; ctx.fillStyle = '#EF4444';
-    ctx.beginPath(); ctx.ellipse(0, 0, 22, 28, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    const fingers = [
-      { ang: -25, len: 26 },
-      { ang: -10, len: 34 },
-      { ang: 10, len: 34 },
-      { ang: 30, len: 30 },
-      { ang: 50, len: 26 },
-    ];
-    fingers.forEach(f => {
-      ctx.save(); ctx.rotate((f.ang * Math.PI) / 180);
-      ctx.beginPath(); ctx.moveTo(0, 2); ctx.lineTo(0, -f.len); ctx.stroke();
-      ctx.restore();
-    });
-    ctx.restore();
-  });
-}
-
-function drawSyntheticHand(ctx, x, y, color = '#EF4444') {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.scale(0.5, 0.5);
-  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  ctx.strokeStyle = color; ctx.fillStyle = color;
-  ctx.beginPath(); ctx.ellipse(0, 0, 22, 28, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  const fingers = [
-    { ang: -25, len: 26 },
-    { ang: -10, len: 34 },
-    { ang: 10, len: 34 },
-    { ang: 30, len: 30 },
-    { ang: 50, len: 26 },
-  ];
-  fingers.forEach(f => {
-    ctx.save(); ctx.rotate((f.ang * Math.PI) / 180);
-    ctx.beginPath(); ctx.moveTo(0, 2); ctx.lineTo(0, -f.len); ctx.stroke();
-    ctx.restore();
-  });
-  ctx.restore();
-}
-
-/* ---------- Placeholder sintetico quando non c'è webcam ---------- */
-function drawSyntheticPlaceholder(ctx, w, h) {
-  ctx.fillStyle = '#0a0a12';
-  ctx.fillRect(0, 0, w, h);
-  ctx.strokeStyle = '#262C3A';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(10, 10, w - 20, h - 20);
-  ctx.fillStyle = '#94A3B8';
-  ctx.font = '14px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('Webcam non disponibile', w / 2, h / 2 - 20);
-  ctx.fillText('Usa i controlli a destra per disegnare', w / 2, h / 2 + 5);
-}
-
 /* ---------- Loop ---------- */
 function tick(now) {
   requestAnimationFrame(tick);
@@ -809,11 +749,12 @@ function tick(now) {
   const ctx = els.ctx;
   ctx.clearRect(0, 0, w, h);
 
-  // Invia frame a MediaPipe Face Mesh + Hands
+  // Disegna webcam sul canvas principale
   if (state.cameraAvailable && els.video && els.video.readyState >= 2) {
     ctx.drawImage(els.video, 0, 0, w, h);
     els.pipCtx.drawImage(els.video, 0, 0, els.pip.width, els.pip.height);
 
+    // Invia frame a MediaPipe Face Mesh + Hands
     if (state.faceMesh && els.video.readyState >= 2) {
       state.faceMesh.send({ image: els.video });
     }
@@ -821,9 +762,9 @@ function tick(now) {
       state.hands.send({ image: els.video });
     }
 
-    // Applica tracciamento faccia all'SVG
+    // Applica tracciamento faccia a Live2D
     if (state.faceLandmarks) {
-      applyFaceToSVG(state.faceLandmarks);
+      applyFaceToLive2D(state.faceLandmarks);
     }
 
     // Invia frame all'API Dense-Armor (opzionale)
@@ -853,13 +794,15 @@ function tick(now) {
     ctx.fillRect(0, 0, w, h);
     drawSyntheticPlaceholder(ctx, w, h);
 
-    // Animazione sintetica dell'SVG senza webcam
-    const t = now * 0.001;
-    const s = state.svg;
-    s.head.setAttribute('transform', `translate(320,240) rotate(${Math.sin(t) * 5},0,0)`);
-    s.neck.setAttribute('transform', `translate(320,240) rotate(${Math.cos(t) * 3},0,0)`);
-    s.mouthLip.setAttribute('d', `M-32,35 Q-16,${28 + Math.sin(t * 2) * 5} 0,35 Q16,${28 + Math.sin(t * 2) * 5} 32,35 Q16,${42 + Math.sin(t * 2) * 5} 0,35 Q-16,${42 + Math.sin(t * 2) * 5} -32,35`);
-    s.mouthInside.setAttribute('opacity', Math.abs(Math.sin(t * 2)) * 0.5);
+    // Animazione sintetica Live2D senza webcam
+    if (state.live2dReady) {
+      const t = now * 0.001;
+      setLive2DParam('ParamAngleX', Math.sin(t) * 10);
+      setLive2DParam('ParamAngleY', Math.cos(t) * 5);
+      setLive2DParam('ParamEyeLOpen', 1);
+      setLive2DParam('ParamEyeROpen', 1);
+      setLive2DParam('ParamMouthOpenY', Math.abs(Math.sin(t * 2)) * 0.5);
+    }
   }
 
   // Disegna layer utente (se c'è qualcosa disegnato)
@@ -868,8 +811,10 @@ function tick(now) {
     ctx.drawImage(cur.canvas, 0, 0, w, h);
   }
 
-  // Disegna mani
-  drawHandsSVG(ctx, w, h);
+  // Disegna mani (solo fallback sintetico, Live2D gestisce le proprie se previsto)
+  if (state.mouseHand.active && state.mouseHand.x != null) {
+    drawSyntheticHand(ctx, state.mouseHand.x, state.mouseHand.y);
+  }
 }
 
 init();

@@ -46,12 +46,14 @@
     background:#000;
   }
   #main-canvas{display:block;max-width:100%;max-height:80%;width:640px;height:480px;}
-  #avatar-svg{
+  #live2d-canvas{
     position:absolute;
     top:0;left:0;width:100%;height:100%;
     pointer-events:none;
+    z-index:10;
   }
-  .pip{
+  #webcam-video{display:none;muted playsinline;}
+  #pip-cam{
     position:absolute;
     bottom:20px;left:20px;
     width:200px;height:150px;
@@ -60,11 +62,10 @@
     overflow:hidden;
     background:#000;
     display:flex;align-items:center;justify-content:center;
-    z-index:10;
+    z-index:20;
   }
-  #pip-cam{width:100%;height:100%;transform:scaleX(-1);}
   .eye-overlay{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;}
-  .hud{position:absolute;top:10px;right:10px;display:flex;gap:8px;flex-wrap:wrap;z-index:20;}
+  .hud{position:absolute;top:10px;right:10px;display:flex;gap:8px;flex-wrap:wrap;z-index:30;}
   .pill-small{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid;color:#fff;}
   .pill-green{color:#10B981;border-color:#10B981;background:rgba(16,185,129,0.15);}
   .pill-amber{color:#FACC15;border-color:#FACC15;background:rgba(250,204,21,0.15);}
@@ -105,7 +106,7 @@
 <div id="app">
 <header>
   <div class="logo">D-AVATAR LIVE</div>
-  <div class="pill">FACE TRACKING + LIPSYNC</div>
+  <div class="pill">LIVE2D + FACE TRACKING</div>
   <div style="flex:1"></div>
   <div id="bg-buttons">
     <div class="sw tr" id="sw-black" title="Nero"></div>
@@ -131,58 +132,16 @@
   <div class="stage-area">
     <div id="canvas-wrap">
       <canvas id="main-canvas" width="640" height="480"></canvas>
-      <video id="webcam-video" style="display:none" muted playsinline></video>
+      <canvas id="live2d-canvas" width="640" height="480"></canvas>
+      <video id="webcam-video" muted playsinline></video>
       <canvas id="pip-cam" width="200" height="150"></canvas>
-      <svg id="avatar-svg" width="640" height="480" viewBox="0 0 640 480" preserveAspectRatio="xMidYMid meet">
-        <!-- Capelli -->
-        <g id="svg-hair" transform="translate(320, 240)">
-          <ellipse cx="0" cy="-70" rx="115" ry="145" fill="#4A3F35" stroke="#111827" stroke-width="3"/>
-        </g>
-        <!-- Collo -->
-        <g id="svg-neck" transform="translate(320, 240)">
-          <ellipse cx="0" cy="35" rx="24" ry="45" fill="#FDBA74" stroke="#111827" stroke-width="3"/>
-        </g>
-        <!-- Testa -->
-        <g id="svg-head" transform="translate(320, 240)">
-          <ellipse cx="0" cy="0" rx="105" ry="115" fill="#FDBA74" stroke="#111827" stroke-width="4"/>
-        </g>
-        <!-- Sopracciglia -->
-        <g id="svg-brows" transform="translate(320, 240)">
-          <path id="brow-left" d="M-55,-35 L-15,-35" stroke="#4A3F35" stroke-width="5" fill="none" stroke-linecap="round"/>
-          <path id="brow-right" d="M15,-35 L55,-35" stroke="#4A3F35" stroke-width="5" fill="none" stroke-linecap="round"/>
-        </g>
-        <!-- Occhi -->
-        <g id="svg-eyes" transform="translate(320, 240)">
-          <g id="eye-left" transform="translate(-58, -25)">
-            <ellipse cx="0" cy="0" rx="24" ry="16" fill="#FFFFFF" stroke="#111827" stroke-width="3"/>
-            <ellipse cx="0" cy="0" rx="24" ry="2" fill="#111827"/>
-            <circle id="pupil-left" cx="0" cy="0" r="7" fill="#06B6D4"/>
-          </g>
-          <g id="eye-right" transform="translate(58, -25)">
-            <ellipse cx="0" cy="0" rx="24" ry="16" fill="#FFFFFF" stroke="#111827" stroke-width="3"/>
-            <ellipse cx="0" cy="0" rx="24" ry="2" fill="#111827"/>
-            <circle id="pupil-right" cx="0" cy="0" r="7" fill="#06B6D4"/>
-          </g>
-        </g>
-        <!-- Naso -->
-        <g id="svg-nose" transform="translate(320, 240)">
-          <path d="M-5,10 L0,-10 L5,10" stroke="#111827" stroke-width="3" fill="none" stroke-linecap="round"/>
-          <circle cx="0" cy="10" r="5" fill="#FDBA74"/>
-        </g>
-        <!-- Bocca -->
-        <g id="svg-mouth" transform="translate(320, 240)">
-          <path id="mouth-lip" d="M-32,35 Q-16,28 0,35 Q16,28 32,35 Q16,42 0,35 Q-16,42 -32,35" fill="none" stroke="#111827" stroke-width="4" stroke-linecap="round"/>
-          <path id="mouth-inside" d="M-32,35 Q0,55 32,35" fill="#7F1D1D" opacity="0"/>
-        </g>
-        <!-- Contorno testa (drift ADWIN) -->
-        <ellipse id="svg-outline" cx="320" cy="240" rx="108" ry="118" fill="none" stroke="#111827" stroke-width="4"/>
-      </svg>
     </div>
     <div class="hud">
       <span class="pill-small pill-green" id="badge-face">FACE: --</span>
       <span class="pill-small pill-green" id="badge-hand">HAND: --</span>
       <span class="pill-small pill-amber" id="badge-fps">FPS: --</span>
       <span class="pill-small pill-green" id="badge-mic">MIC: --</span>
+      <span class="pill-small pill-green" id="badge-live2d">LIVE2D: --</span>
     </div>
   </div>
   <div class="panel-right">
@@ -242,6 +201,8 @@
     </div>
   </div>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@7.x/dist/pixi.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@1.x/dist/pixi-live2d-display.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1650995939/hands.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1650995939/face_mesh.js"></script>
 <script src="webcam_avatar.js"></script>
