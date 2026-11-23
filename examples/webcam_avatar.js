@@ -774,8 +774,11 @@ function tick(now) {
         fetch('http://127.0.0.1:5000/features/transform', {method:'POST', headers:{'Content-Type':'application/json'}, body}).then(r=>r.json()).catch(()=>({})),
         fetch('http://127.0.0.1:5000/motion/global', {method:'POST', headers:{'Content-Type':'application/json'}, body}).then(r=>r.json()).catch(()=>({})),
         fetch('http://127.0.0.1:5000/motion/energy', {method:'POST', headers:{'Content-Type':'application/json'}, body}).then(r=>r.json()).catch(()=>({})),
-      ]).then(([features, motion, energy]) => {
-        state.apiParams = {...features, ...motion, ...energy};
+        fetch('http://127.0.0.1:5000/registration/transform', {method:'POST', headers:{'Content-Type':'application/json'}, body}).then(r=>r.json()).catch(()=>({})),
+        fetch('http://127.0.0.1:5000/stabilizer/transform', {method:'POST', headers:{'Content-Type':'application/json'}, body}).then(r=>r.json()).catch(()=>({})),
+        fetch('http://127.0.0.1:5000/tracker/moving', {method:'POST', headers:{'Content-Type':'application/json'}, body}).then(r=>r.json()).catch(()=>({})),
+      ]).then(([features, motion, energy, registration, stabilizer, tracker]) => {
+        state.apiParams = {...features, ...motion, ...energy, ...registration, ...stabilizer, ...tracker};
       });
     }
 
@@ -787,10 +790,16 @@ function tick(now) {
     const dx = state.apiParams.dx || 0;
     const dy = state.apiParams.dy || 0;
     const motion_max = state.apiParams.motion_max || 0;
+    const reg_dx = state.apiParams.reg_dx || 0;
+    const reg_dy = state.apiParams.reg_dy || 0;
+    const stab_dx = state.apiParams.stab_dx || 0;
+    const stab_dy = state.apiParams.stab_dy || 0;
+    const trk_dx = state.apiParams.trk_dx || 0;
+    const trk_dy = state.apiParams.trk_dy || 0;
 
     const params = {
-      head_yaw: (cx - 0.5) * 60 + dx * 5,
-      head_pitch: (cy - 0.5) * 60 + dy * 5,
+      head_yaw: (cx - 0.5) * 60 + dx * 5 + reg_dx * 3 + stab_dx * 3 + trk_dx * 3,
+      head_pitch: (cy - 0.5) * 60 + dy * 5 + reg_dy * 3 + stab_dy * 3 + trk_dy * 3,
       head_roll: 0,
       mouth_open: Math.min(1, Math.max(0, (128 - mean) / 128 + motion_max / 500)),
       eye_l: Math.min(1, Math.max(0, contrast / 100)),
