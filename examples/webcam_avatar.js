@@ -30,6 +30,16 @@ const els = {};
 function $(id) { return document.getElementById(id); }
 
 function init() {
+  const required = ['main-canvas', 'draw-canvas', 'webcam-video', 'pip-cam', 'badge-face', 'badge-hand', 'badge-fps', 'crosshair'];
+  for (const id of required) {
+    if (!document.getElementById(id)) {
+      const msg = document.createElement('div');
+      msg.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#EF4444;color:#fff;padding:20px;border-radius:8px;font-family:sans-serif;z-index:9999;';
+      msg.textContent = 'Elemento mancante: #' + id + '. Ricarica la pagina.';
+      document.body.appendChild(msg);
+      return;
+    }
+  }
   els.canvas = $('main-canvas');
   els.ctx = els.canvas.getContext('2d', { willReadFrequently: true });
   els.draw = $('draw-canvas');
@@ -53,7 +63,10 @@ function init() {
   }).catch(err => {
     console.warn('Webcam non disponibile, uso placeholder sintetico:', err);
     state.cameraAvailable = false;
-    els.faceBadge.textContent = 'CAM: NO CAM';
+    $('btn-camera').textContent = 'ATTIVA CAMERA';
+    $('btn-camera').style.background = 'transparent';
+    $('btn-camera').style.color = 'var(--text-primary)';
+    els.faceBadge.textContent = 'CAM: NEGATA';
     els.faceBadge.className = 'pill-small pill-red';
     els.handBadge.textContent = 'HAND: --';
     els.handBadge.className = 'pill-small pill-red';
@@ -157,11 +170,19 @@ async function startWebcam() {
     state.cameraOn = true;
     state.cameraAvailable = true;
     $('webcam-toggle').checked = true;
+    $('btn-camera').textContent = 'SPEGNI CAMERA';
+    $('btn-camera').style.background = 'var(--accent-primary)';
+    $('btn-camera').style.color = '#fff';
     els.faceBadge.textContent = 'CAM: OK';
     els.faceBadge.className = 'pill-small pill-green';
   } catch (e) {
     state.cameraOn = false;
     state.cameraAvailable = false;
+    $('btn-camera').textContent = 'ATTIVA CAMERA';
+    $('btn-camera').style.background = 'transparent';
+    $('btn-camera').style.color = 'var(--text-primary)';
+    els.faceBadge.textContent = 'CAM: NEGATA';
+    els.faceBadge.className = 'pill-small pill-red';
     throw e;
   }
 }
@@ -229,13 +250,41 @@ function onHandsResults(results) {
 }
 
 function initEvents() {
-  $('webcam-toggle').addEventListener('change', (e) => {
-    state.cameraOn = e.target.checked;
-    if (!state.cameraOn && state.stream) {
+  $('btn-camera').addEventListener('click', async () => {
+    if (state.cameraOn && state.stream) {
+      // Spegni
+      state.cameraOn = false;
       state.stream.getTracks().forEach(t => t.stop());
       state.stream = null;
-    } else if (state.cameraOn && !state.stream) {
-      startWebcam();
+      $('btn-camera').textContent = 'ATTIVA CAMERA';
+      $('btn-camera').style.background = 'transparent';
+      $('btn-camera').style.color = 'var(--text-primary)';
+      els.faceBadge.textContent = 'CAM: SPENTA';
+      els.faceBadge.className = 'pill-small pill-red';
+      return;
+    }
+    // Accendi
+    try {
+      await startWebcam();
+      $('btn-camera').textContent = 'SPEGNI CAMERA';
+      $('btn-camera').style.background = 'var(--accent-primary)';
+      $('btn-camera').style.color = '#fff';
+      els.faceBadge.textContent = 'CAM: OK';
+      els.faceBadge.className = 'pill-small pill-green';
+    } catch (e) {
+      $('btn-camera').textContent = 'ATTIVA CAMERA';
+      els.faceBadge.textContent = 'CAM: NEGATA';
+      els.faceBadge.className = 'pill-small pill-red';
+      alert('Webcam non attivabile.\n\nCosa fare:\n1. Accetta il permesso quando il browser lo chiede (icona lucchetto nella barra indirizzi).\n2. Usa http://localhost:8000 (non aprire il file con doppio clic).\n3. Chiudi altre app che usano la webcam (Zoom, Teams, OBS).\n\nErrore: ' + e.message);
+    }
+  });
+
+  // Checkbox legacy: mantiene sincronizzato con lo stato
+  $('webcam-toggle').addEventListener('change', (e) => {
+    if (e.target.checked && !state.cameraOn) {
+      $('btn-camera').click();
+    } else if (!e.target.checked && state.cameraOn) {
+      $('btn-camera').click();
     }
   });
 
