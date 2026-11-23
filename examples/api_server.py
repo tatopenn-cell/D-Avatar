@@ -1,16 +1,16 @@
 """API server: espone le primitive Dense-Armor al frontend HTML/JS via HTTP."""
 from __future__ import annotations
 
-from flask import Flask, request, jsonify
+import numpy as np
+from dense_armor._dtype import as_default_array
+from dense_armor.core.online.drift.adwin import ADWIN
 from dense_armor.core.signals.vision.features import FrameFeatures
+from dense_armor.core.signals.vision.landmarks import BatchedLandmarkShield, LandmarkStream
 from dense_armor.core.signals.vision.motion import GlobalMotion, MotionEnergy
 from dense_armor.core.signals.vision.registration import Registration, Stabilizer
 from dense_armor.core.signals.vision.tracking import MovingObjectTracker
-from dense_armor.core.signals.vision.landmarks import LandmarkStream, BatchedLandmarkShield
-from dense_armor.core.online.drift.adwin import ADWIN
-from dense_armor.roles import RealtimePipeline, Transformer
-from dense_armor._dtype import as_default_array
-import numpy as np
+from dense_armor.roles import RealtimePipeline
+from flask import Flask, jsonify, request
 
 app = Flask(__name__)
 
@@ -74,10 +74,13 @@ def shield_transform():
     conf = as_default_array(np.array(data.get("confidence", np.ones(len(pts))), dtype=np.float32))
     t = data.get("t")
     result = shield.transform_one({"points": pts, "confidence": conf, "t": t})
-    return jsonify({
-        "points": result["points"].tolist() if hasattr(result["points"], "tolist") else result["points"],
-        "cleaned": result["cleaned"].tolist() if hasattr(result["cleaned"], "tolist") else result["cleaned"],
-    })
+    pts_out = result["points"]
+    cleaned_out = result["cleaned"]
+    if hasattr(pts_out, "tolist"):
+        pts_out = pts_out.tolist()
+    if hasattr(cleaned_out, "tolist"):
+        cleaned_out = cleaned_out.tolist()
+    return jsonify({"points": pts_out, "cleaned": cleaned_out})
 
 @app.post("/adwin/update")
 def adwin_update():
@@ -90,9 +93,9 @@ def adwin_update():
 def pipeline_build():
     data = request.get_json(force=True)
     period_s = float(data.get("period_s", 0.05))
-    max_step = float(data.get("max_step", 0.1))
-    max_step_deg = float(data.get("max_step_deg", 5.0))
-    pipeline = RealtimePipeline(period_s=period_s)
+    _ = data.get("max_step", 0.1)
+    _ = data.get("max_step_deg", 5.0)
+    _ = RealtimePipeline(period_s=period_s)
     return jsonify({"status": "built", "period_s": period_s})
 
 @app.get("/status")

@@ -23,7 +23,7 @@ try:
     import cv2  # noqa: PLC0415
 
     _CV2_AVAILABLE = True
-except ImportError:  # pragma: no cover - cv2 is optional for tests without drawing
+except ImportError:
     cv2 = None  # type: ignore[assignment]
     _CV2_AVAILABLE = False
 
