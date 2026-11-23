@@ -40,6 +40,14 @@ class CameraSource:
                 self._start_t = t
             yield (t - self._start_t, image)
 
+    def read(self) -> tuple[bool, Any]:
+        """Read one frame from the capture.
+
+        Returns:
+            ``(ok, image)`` as returned by the underlying capture object.
+        """
+        return self._cap.read()  # type: ignore[no-any-return]
+
     def close(self) -> None:
         """Release the capture."""
         self._cap.release()
