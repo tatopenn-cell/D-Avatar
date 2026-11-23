@@ -29,6 +29,8 @@ const state = {
   micData: null,
   micReady: false,
   mouthOpenByAudio: 0,
+  // Effetti TikTok
+  currentEffect: 'none',
   // Live2D
   live2dApp: null,
   live2dModel: null,
@@ -463,6 +465,130 @@ function drawSyntheticPlaceholder(ctx, w, h) {
   ctx.fillText('Usa i controlli a destra per disegnare', w / 2, h / 2 + 5);
 }
 
+/* ---------- Effetti TikTok ---------- */
+function applyEffect(ctx, w, h) {
+  const eff = state.currentEffect;
+  if (eff === 'none') return;
+
+  ctx.save();
+
+  if (eff === 'mirror') {
+    ctx.translate(w, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(els.video, 0, 0, w, h);
+    ctx.restore();
+    return;
+  }
+
+  if (eff === 'pixelate') {
+    const px = 12;
+    for (let y = 0; y < h; y += px) {
+      for (let x = 0; x < w; x += px) {
+        const p = ctx.getImageData(x, y, 1, 1).data;
+        ctx.fillStyle = `rgb(${p[0]},${p[1]},${p[2]})`;
+        ctx.fillRect(x, y, px, px);
+      }
+    }
+    ctx.restore();
+    return;
+  }
+
+  if (eff === 'sepia') {
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const d = imgData.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i], g = d[i+1], b = d[i+2];
+      d[i]   = Math.min(255, (r * 0.393) + (g * 0.769) + (b * 0.189));
+      d[i+1] = Math.min(255, (r * 0.349) + (g * 0.686) + (b * 0.168));
+      d[i+2] = Math.min(255, (r * 0.272) + (g * 0.534) + (b * 0.131));
+    }
+    ctx.putImageData(imgData, 0, 0);
+    ctx.restore();
+    return;
+  }
+
+  if (eff === 'invert') {
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const d = imgData.data;
+    for (let i = 0; i < d.length; i += 4) {
+      d[i]   = 255 - d[i];
+      d[i+1] = 255 - d[i+1];
+      d[i+2] = 255 - d[i+2];
+    }
+    ctx.putImageData(imgData, 0, 0);
+    ctx.restore();
+    return;
+  }
+
+  if (eff === 'blur') {
+    ctx.filter = 'blur(8px)';
+    ctx.drawImage(els.video, 0, 0, w, h);
+    ctx.filter = 'none';
+    ctx.restore();
+    return;
+  }
+
+  if (eff === 'glitch') {
+    const t = Date.now() * 0.002;
+    const offset = Math.sin(t * 5) * 10;
+    ctx.drawImage(els.video, offset, 0, w, h);
+    ctx.drawImage(els.video, -offset, 20, w, h);
+    ctx.fillStyle = 'rgba(255,0,0,0.15)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+    return;
+  }
+
+  if (eff === 'cry') {
+    // Lacrime sul viso (posizione approssimativa centro)
+    ctx.fillStyle = '#06B6D4';
+    const cx = w / 2, cy = h / 2;
+    for (let i = 0; i < 4; i++) {
+      const tx = cx + Math.sin(Date.now() * 0.005 + i) * 40;
+      const ty = cy - 20 + (i * 15) + (Math.sin(Date.now() * 0.003 + i) * 5);
+      ctx.beginPath();
+      ctx.arc(tx, ty, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(tx, ty + 6);
+      ctx.lineTo(tx, ty + 14);
+      ctx.strokeStyle = '#06B6D4';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+    ctx.restore();
+    return;
+  }
+
+  if (eff === 'bigeyes') {
+    // Cerchi grandi sugli occhi (posizione approssimativa)
+    ctx.strokeStyle = '#00FF00';
+    ctx.lineWidth = 4;
+    const cx = w / 2;
+    ctx.beginPath();
+    ctx.arc(cx - 80, h / 2 - 40, 35, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx + 80, h / 2 - 40, 35, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  if (eff === 'bighead') {
+    // Cornice grande intorno alla testa
+    ctx.strokeStyle = '#FF00FF';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.arc(w / 2, h / 2 - 30, 120, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  ctx.restore();
+}
+
 /* ---------- Eventi ---------- */
 function initEvents() {
   $('btn-camera').addEventListener('click', async () => {
@@ -636,6 +762,15 @@ function initEvents() {
     }
   });
 
+  // Selezione effetti
+  document.querySelectorAll('.eff-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.eff-btn').forEach(b => b.style.background = 'transparent');
+      btn.style.background = 'var(--accent-primary)';
+      state.currentEffect = btn.dataset.effect;
+    });
+  });
+
   // Mano sintetica mouse fallback
   els.canvas.addEventListener('mousemove', (e) => {
     const rect = els.canvas.getBoundingClientRect();
@@ -753,6 +888,7 @@ function tick(now) {
   if (state.cameraAvailable && els.video && els.video.readyState >= 2) {
     ctx.drawImage(els.video, 0, 0, w, h);
     els.pipCtx.drawImage(els.video, 0, 0, els.pip.width, els.pip.height);
+    applyEffect(ctx, w, h);
 
     // Invia frame a MediaPipe Face Mesh + Hands
     if (state.faceMesh && els.video.readyState >= 2) {
