@@ -169,7 +169,8 @@ async function startWebcam() {
     els.video.play();
     state.cameraOn = true;
     state.cameraAvailable = true;
-    $('webcam-toggle').checked = true;
+    const tg = $('webcam-toggle');
+    if (tg) tg.checked = true;
     $('btn-camera').textContent = 'SPEGNI CAMERA';
     $('btn-camera').style.background = 'var(--accent-primary)';
     $('btn-camera').style.color = '#fff';
