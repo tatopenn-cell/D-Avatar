@@ -10,6 +10,8 @@ nav:
   - Home: index.md
   - Dense-Armor map: dense_armor_map.md
   - Tracking without a model: tracking_without_a_model.md
+  - Letture Passo A: letture_passo_A.md
+  - Avatar 3D VMagicMirror: avatar_3d_vmagicmirror.md
 
 plugins:
   - search
