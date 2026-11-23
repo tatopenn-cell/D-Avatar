@@ -27,12 +27,12 @@ from typing import Any
 
 import numpy as np
 from dense_armor._dtype import as_default_array  # type: ignore[import-untyped]
-from dense_armor.core.signals.vision.landmarks import (
+from dense_armor.core.signals.vision.landmarks import (  # type: ignore[import-untyped]
     _DT_EPS,
     BatchedLandmarkShield,
     _hampel_batch,
     _hampel_value,
-)  # type: ignore[import-untyped]
+)
 from dense_armor.roles import Transformer  # type: ignore[import-untyped]
 
 # _DT_EPS is imported from dense_armor, don't redefine
@@ -163,13 +163,13 @@ class FaceShield(Transformer):
             self._shield._f[0, 2] = self._shield._f[1, 3] = self._dt
 
         # Delegate to wrapped shield
-        frame_dict = {'points': pts, 'confidence': conf}
+        frame_dict: dict[str, Any] = {'points': pts, 'confidence': conf}
         if frame_t is not None:
             frame_dict['t'] = frame_t
         elif t is not None:
             frame_dict['t'] = t
 
-        result = self._shield.transform_one(frame_dict)
+        result: dict = self._shield.transform_one(frame_dict)
 
         # Learn neutral from wrapped shield
         measured = (conf > 0.0) & np.all(np.isfinite(pts), axis=1)

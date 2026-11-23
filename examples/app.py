@@ -89,7 +89,9 @@ class App:
                 urllib.request.urlretrieve(MODEL_URL, MODEL)
             index = int(self.index.get())
             # Use Dense-Armor's CameraStream via camera_stream_frames
-            self._cam_gen = camera_stream_frames(device=index, fps=30.0, gray=False)
+            self._cam_gen = camera_stream_frames(
+                device=index, fps=30.0, gray=False, size=(640, 480)
+            )
             self.det = FaceDetector.open_default(str(MODEL))
             self.ap = AvatarPipeline(vmc_host=self.host.get(), vmc_port=int(self.port.get()))
         except Exception as e:

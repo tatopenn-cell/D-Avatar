@@ -60,7 +60,9 @@ def main() -> int:
     print(f'Sending VMC to {args.host}:{args.port}. Press q in the window, or Ctrl+C, to quit.')
     n = 0
     try:
-        for t, rgb in camera_stream_frames(device=args.index, fps=30.0, gray=False):
+        for t, rgb in camera_stream_frames(
+            device=args.index, fps=30.0, gray=False, size=(640, 480)
+        ):
             # CameraStream yields RGB float32 in [0, 1]; convert to BGR uint8 for display
             bgr = cv2.cvtColor((rgb * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
             # FaceDetector expects RGB; rgb is already RGB float32
