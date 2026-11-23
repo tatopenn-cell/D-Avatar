@@ -657,7 +657,10 @@ function drawAvatar(ctx, w, h, params) {
   ctx.restore();
 
   ctx.restore(); ctx.restore();
-  ctx.strokeStyle = '#111827'; ctx.lineWidth = 4; ctx.beginPath(); ctx.ellipse(0, -10, 102, 117, roll, 0, Math.PI * 2); ctx.stroke();
+  // Contorno testa: diventa rosso se ADWIN rileva drift
+  ctx.strokeStyle = state.apiParams.drift_detected ? '#EF4444' : '#111827';
+  ctx.lineWidth = state.apiParams.drift_detected ? 6 : 4;
+  ctx.beginPath(); ctx.ellipse(0, -10, 102, 117, roll, 0, Math.PI * 2); ctx.stroke();
 
   // Mani da tracciamento (MediaPipe o sintetico)
   drawHands(ctx, w, h);
@@ -777,8 +780,10 @@ function tick(now) {
         fetch('http://127.0.0.1:5000/registration/transform', {method:'POST', headers:{'Content-Type':'application/json'}, body}).then(r=>r.json()).catch(()=>({})),
         fetch('http://127.0.0.1:5000/stabilizer/transform', {method:'POST', headers:{'Content-Type':'application/json'}, body}).then(r=>r.json()).catch(()=>({})),
         fetch('http://127.0.0.1:5000/tracker/moving', {method:'POST', headers:{'Content-Type':'application/json'}, body}).then(r=>r.json()).catch(()=>({})),
-      ]).then(([features, motion, energy, registration, stabilizer, tracker]) => {
-        state.apiParams = {...features, ...motion, ...energy, ...registration, ...stabilizer, ...tracker};
+        fetch('http://127.0.0.1:5000/adwin/update', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({value: motion_max})}).then(r=>r.json()).catch(()=>({})),
+        fetch('http://127.0.0.1:5000/shield/transform', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({points:[[80,80]], confidence:[1]})}).then(r=>r.json()).catch(()=>({})),
+      ]).then(([features, motion, energy, registration, stabilizer, tracker, adwin, shield]) => {
+        state.apiParams = {...features, ...motion, ...energy, ...registration, ...stabilizer, ...tracker, ...adwin, ...shield};
       });
     }
 
