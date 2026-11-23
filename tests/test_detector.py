@@ -61,7 +61,9 @@ def test_detector_returns_mesh_frame_with_confidence_one():
     frame = det.detect(image, t=1.5)
     assert frame['t'] == 1.5
     assert frame['points'].shape == (68, 2)
-    # Reference computed by mesh_to_68 (not by detector)
+    # Reference: mesh_to_68 output (detector internally uses mesh_to_68).
+    # This tests that the detector correctly wraps mesh_to_68 and returns
+    # the expected frame format with confidence=1 and iris=(2,2).
     ref = mesh_to_68(mesh)
     assert np.allclose(frame['points'], ref, equal_nan=True)
     assert np.all(frame['confidence'] == 1.0)

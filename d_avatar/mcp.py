@@ -72,7 +72,7 @@ class DAvatarMCPTools:
             'calibrators': {
                 'blink': {
                     'open_ear': calibrator.open_ear(),
-                    'centroids': calibrator.get_params()['centroids'],
+                    'centroids': calibrator._c.tolist() if calibrator._c is not None else None,
                 },
                 'gaze': {
                     'neutral': gaze_cal.neutral(),
