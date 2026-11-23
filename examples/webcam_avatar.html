@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>D-Avatar Studio — Live Input</title>
+<style>
+:root{
+  --bg-app:#0D0F12;
+  --bg-panel:#161920;
+  --bg-elevated:#212530;
+  --border-subtle:#2A2F3D;
+  --accent-primary:#6366F1;
+  --accent-hover:#4F46E5;
+  --status-live:#10B981;
+  --status-alert:#EF4444;
+  --chroma-green:#00FF00;
+  --text-primary:#F3F4F6;
+  --text-secondary:#9CA3AF;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;overflow:hidden;background:var(--bg-app);color:var(--text-primary);font-family:Inter,-apple-system,sans-serif;}
+#app{display:flex;flex-direction:column;height:100%;}
+header{
+  height:56px;
+  border-bottom:1px solid var(--border-subtle);
+  display:flex;align-items:center;padding:0 16px;
+  gap:12px;
+}
+.logo{font-weight:700;letter-spacing:1px;font-size:16px;}
+.pill{font-size:11px;padding:2px 8px;border-radius:999px;background:#212530;color:var(--status-live);border:1px solid var(--status-live);}
+#bg-buttons{display:flex;gap:4px;}
+.sw{border-radius:50%;width:20px;height:20px;border:2px solid transparent;cursor:pointer;}
+.sw.active{border-color:#fff;}
+.sw.tr{background:#000000;}
+.sw.ch{background:var(--chroma-green);}
+.sw.trans{background:#2A2F3D;background-image:linear-gradient(45deg,#ccc 25%,transparent 25%),linear-gradient(45deg,transparent 25%,#ccc 25%),linear-gradient(45deg,transparent 75%,#ccc 75%),linear-gradient(45deg,#ccc 75%,transparent 75%);background-size:10px 10px;background-position:0 0,0 10px,10px -10px,-10px 0px;}
+.sw:focus{outline-color:var(--accent-primary);}
+#main{flex:1;display:flex;overflow:hidden;}
+.stage-area{flex:1;position:relative;display:flex;align-items:center;justify-content:center;background:#0a0a12;}
+#canvas-wrap{
+  position:relative;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 20px 40px rgba(0,0,0,0.5);
+  border-radius:12px;
+  border:1px solid var(--border-subtle);
+  background:#000;
+}
+#main-canvas{display:block;max-width:100%;max-height:80%;}
+.pip{
+  position:absolute;
+  bottom:20px;left:20px;
+  width:200px;height:150px;
+  border:1px solid var(--border-subtle);
+  border-radius:8px;
+  overflow:hidden;
+  background:#000;
+  display:flex;align-items:center;justify-content:center;
+}
+#pip-cam{width:100%;height:100%;object-fit:cover;transform:scaleX(-1);}
+.eye-overlay{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;}
+.hud{position:absolute;top:10px;right:10px;display:flex;gap:8px;flex-wrap:wrap;}
+.pill-small{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid;color:#fff;}
+.pill-green{color:#10B981;border-color:#10B981;background:rgba(16,185,129,0.15);}
+.pill-amber{color:#FACC15;border-color:#FACC15;background:rgba(250,204,21,0.15);}
+.pill-red{color:#EF4444;border-color:#EF4444;background:rgba(239,68,68,0.15);}
+.panel-right{
+  width:440px;
+  display:flex;flex-direction:column;
+  background:var(--bg-panel);
+  border-left:1px solid var(--border-subtle);
+  overflow:hidden;
+}
+.panel-header{padding:10px 12px;background:rgba(255,255,255,0.03);border-bottom:1px solid var(--border-subtle);font-weight:600;font-size:14px;}
+.tabs{display:flex;border-bottom:1px solid var(--border-subtle);}
+.tab{flex:1;padding:8px 6px;text-align:center;font-size:12px;cursor:pointer;color:var(--text-secondary);border-bottom:2px solid transparent;}
+.tab.active{color:var(--accent-primary);border-bottom-color:var(--accent-primary);}
+.panel-body{flex:1;overflow:auto;display:flex;flex-direction:column;}
+.pad-wrap{padding:12px;display:flex;flex-direction:column;gap:8px;}
+.canvas-wrap{position:relative;width:100%;aspect-ratio:1;border:1px solid var(--border-subtle);border-radius:8px;overflow:hidden;background:#000;}
+#draw-canvas{width:100%;height:100%;cursor:crosshair;}
+.crosshair{position:absolute;width:16px;height:16px;border:2px solid var(--accent-primary);border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;display:none;}
+.tbar{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;}
+.c-swatch{width:16px;height:16px;border-radius:50%;border:1px solid #fff;cursor:pointer;}
+.c-swatch.active{box-shadow:0 0 0 2px #fff;}
+.range-wrap{display:flex;align-items:center;gap:6px;}
+.c-range{flex:1;}
+#save-png{width:100%;padding:6px;background:var(--accent-primary);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;}
+#save-png:hover{background:var(--accent-hover);}
+.panel-footer{padding:10px 12px;border-top:1px solid var(--border-subtle);display:flex;flex-direction:column;gap:6px;}
+.range-row{display:flex;align-items:center;gap:6px;}
+.c-range{flex:1;}
+.val{width:40px;text-align:right;font-size:12px;color:var(--text-secondary);}
+.btn-wide{width:100%;padding:10px;border:none;border-radius:6px;background:var(--accent-primary);color:#fff;font-weight:600;cursor:pointer;}
+.btn-wide:hover{background:var(--accent-hover);}
+.btn-wide:active{transform:translateY(1px);}
+</style>
+</head>
+<body>
+<div id="app">
+<header>
+  <div class="logo">D-AVATAR LIVE</div>
+  <div class="pill">LOCAL LIVE2D</div>
+  <div style="flex:1"></div>
+  <div id="bg-buttons">
+    <div class="sw tr" id="sw-black" title="Nero"></div>
+    <div class="sw ch active" id="sw-green" title="Green Screen"></div>
+    <div class="sw trans" id="sw-trans" title="Trasparente"></div>
+  </div>
+  <div id="header-controls" style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+    <label style="font-size:11px;color:var(--text-secondary);">Camera</label>
+    <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="webcam-toggle" checked style="accent-color:var(--accent-primary);"><span style="font-size:11px;">Sorgente Webcam</span></label>
+    <button id="btn-clean" style="padding:6px 12px;border-radius:6px;border:1px solid var(--accent-primary);color:var(--text-primary);background:transparent;cursor:pointer;">Modalità Pulita / Solo Avatar</button>
+  </div>
+</header>
+<div id="main">
+  <div class="stage-area">
+    <div id="canvas-wrap">
+      <canvas id="main-canvas"></canvas>
+      <div class="eye-overlay" id="pip-cam"></div>
+    </div>
+    <div class="hud">
+      <span class="pill-small pill-green" id="badge-face">FACE: --</span>
+      <span class="pill-small pill-green" id="badge-hand">HAND: --</span>
+      <span class="pill-small pill-amber" id="badge-fps">FPS: --</span>
+    </div>
+  </div>
+  <div class="panel-right">
+    <div class="panel-header">LAYER &amp; DISEGNO</div>
+    <div class="panel-body">
+      <div class="tabs" id="layer-tabs">
+        <div class="tab active" data-layer="head">Testa/Corpo</div>
+        <div class="tab" data-layer="eyes-open">Occhi Aperti</div>
+        <div class="tab" data-layer="eyes-closed">Occhi Chiusi</div>
+        <div class="tab" data-layer="mouth-open">Bocca Aperta</div>
+        <div class="tab" data-layer="mouth-closed">Bocca Chiusa</div>
+        <div class="tab" data-layer="hand-default">Mano Default</div>
+        <div class="tab" data-layer="hand-horns">Mano Corna 🤘</div>
+      </div>
+      <div class="pad-wrap">
+        <div class="canvas-wrap">
+          <canvas id="draw-canvas"></canvas>
+          <div class="crosshair" id="crosshair"></div>
+        </div>
+        <div class="tbar">
+          <label style="font-size:11px;color:var(--text-secondary);">Colore</label>
+          <div class="c-swatch active" data-color="#ffffff" style="background:#ffffff;"></div>
+          <div class="c-swatch" data-color="#000000" style="background:#000000;"></div>
+          <div class="c-swatch" data-color="#ff0000" style="background:#ff0000;"></div>
+          <div class="c-swatch" data-color="#00ff00" style="background:#00ff00;"></div>
+          <div class="c-swatch" data-color="#0000ff" style="background:#0000ff;"></div>
+          <div class="c-swatch" data-color="#ffff00" style="background:#ffff00;"></div>
+          <input type="color" id="color-picker" style="border:none;width:20px;height:20px;cursor:pointer;padding:0;background:none;">
+          <div class="range-wrap"><label style="font-size:11px;color:var(--text-secondary);">Dimensione</label><input type="range" id="brush-size" min="2" max="40" value="8" class="c-range"></div>
+          <button id="btn-undo" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border-subtle);color:var(--text-primary);background:transparent;cursor:pointer;">Annulla</button>
+          <button id="btn-clear" style="padding:4px 8px;border-radius:4px;border:1px solid var(--status-alert);color:var(--status-alert);background:transparent;cursor:pointer;">Pulisci</button>
+          <button id="btn-load-png" style="padding:4px 8px;border-radius:4px;border:1px solid var(--accent-primary);color:var(--text-primary);background:transparent;cursor:pointer;">Carica PNG</button>
+          <input type="file" id="png-file" accept="image/*" style="display:none;">
+        </div>
+        <div class="panel-footer">
+          <div class="range-wrap"><label>Soglia Occhi Aperti</label><input type="range" id="thresh-eye" min="0.1" max="0.9" step="0.05" value="0.3" class="c-range"><span class="val" id="val-eye">0.30</span></div>
+          <div class="range-wrap"><label>Soglia Bocca Aperta</label><input type="range" id="thresh-mouth" min="0.1" max="0.9" step="0.05" value="0.3" class="c-range"><span class="val" id="val-mouth">0.30</span></div>
+          <div class="range-wrap"><label>Sensibilità Testa</label><input type="range" id="thresh-head" min="0.5" max="2.0" step="0.1" value="1.0" class="c-range"><span class="val" id="val-head">1.0</span></div>
+          <button id="btn-apply" class="btn-wide">Applica all'Avatar Live</button>
+          <div style="margin-top:8px;"><button id="btn-export" style="width:100%;padding:6px;border:none;border-radius:6px;background:#212530;color:var(--text-primary);cursor:pointer;">Esporta Personaggio (.json)</button></div>
+          <div style="margin-top:6px;"><input type="file" id="json-file" accept=".json" style="display:none;"><label style="font-size:11px;color:var(--text-secondary);">Importa Personaggio</label><input type="file" id="json-import" accept=".json" style="display:none; margin-top:4px;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="webcam_avatar.js"></script>
+</body>
+</html>
