@@ -1,12 +1,12 @@
 """D-Avatar example app: live camera → native tracker → 2D avatar + optional VMC.
 
 Window layout:
-- left: stabilised face video (Dense-Armor primitives, no dots)
-- right: 2D avatar (draw_avatar)
+- left: live camera preview (always on when the app is open)
+- right: 2D avatar (draw_avatar), driven by the native tracker
 - bottom: status bar with live Dense-Armor class names + 7 parameter bars
-- buttons: Start / Stop
+- buttons: Start / Stop tracking (+ VMC)
 
-Run: python examples/app.py [--detector mediapipe] [--vmc-port 39539]
+Run: python examples/app.py [--vmc-port 39539]
 
 MediaPipe path is present in the repo but OFF by default: the default path
 uses only Dense-Armor primitives (no pre-trained model).
@@ -49,31 +49,44 @@ _DENSE_ARMOR_CLASSES = (
 
 _CAM_SIZE = (640, 480)
 _AVATAR_SIZE = 400
-_CALIBRATION_SECONDS = 3
+_CALIBRATION_FRAMES = 90  # 3 seconds at 30 fps
 
 
 class DAvatarApp:
-    """Tkinter application: camera → tracker → avatar + VMC."""
+    """Tkinter application: camera → tracker → avatar + VMC.
 
-    def __init__(self, root: tk.Tk, vmc_port: int = 39539, use_mediapipe: bool = False) -> None:
+    The camera preview runs as soon as the app opens. Clicking "Avvia"
+    starts the native tracker and (optionally) VMC sending to VMagicMirror.
+    """
+
+    def __init__(self, root: tk.Tk, vmc_port: int = 39539) -> None:
         if not _TK_AVAILABLE:
             raise ImportError('tkinter and Pillow are required for the app')
         self.root = root
         self.root.title('D-Avatar — live native tracker')
         self.vmc_port = vmc_port
-        self.use_mediapipe = use_mediapipe
 
-        self._running = False
-        self._thread: threading.Thread | None = None
-        self._stop = threading.Event()
-        self._latest_params: dict[str, float] = {}
-        self._latest_frame: np.ndarray | None = None
-        self._latest_stabilised: np.ndarray | None = None
+        # Shared state between camera thread and UI
         self._lock = threading.Lock()
-        self._vmc: VmcSender | None = None
+        self._latest_frame: np.ndarray | None = None
+        self._latest_params: dict[str, float] = {}
+        self._calibrating = True
+        self._calib_frames_done = 0
+
+        # Tracking state (started by "Avvia")
+        self._tracking = False
+        self._track_thread: threading.Thread | None = None
+        self._track_stop = threading.Event()
         self._tracker: NativeTracker | None = None
+        self._vmc: VmcSender | None = None
+
+        # Camera thread (always running while the app is open)
+        self._cam_thread: threading.Thread | None = None
+        self._cam_stop = threading.Event()
 
         self._build_ui()
+        self._start_camera()
+        self.root.after(100, self._refresh_ui)
 
     # -- UI --------------------------------------------------------------
 
@@ -82,7 +95,7 @@ class DAvatarApp:
         area = tk.Frame(self.root)
         area.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
-        self.video_label = tk.Label(area, bg='black', text='video (stopped)')
+        self.video_label = tk.Label(area, bg='black', text='camera (starting…)')
         self.video_label.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.avatar_label = tk.Label(area, bg='#e0e0e0', text='avatar')
@@ -93,7 +106,9 @@ class DAvatarApp:
         bar_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
 
         tk.Label(
-            bar_frame, text='Dense-Armor classes: ' + ', '.join(_DENSE_ARMOR_CLASSES), anchor='w'
+            bar_frame,
+            text='Dense-Armor classes: ' + ', '.join(_DENSE_ARMOR_CLASSES),
+            anchor='w',
         ).pack(fill=tk.X)
 
         self._param_vars: dict[str, tk.DoubleVar] = {}
@@ -118,7 +133,7 @@ class DAvatarApp:
                 orient=tk.HORIZONTAL,
                 variable=var,
                 showvalue=False,
-                state='disabled',
+                state='normal',
             )
             scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
             lbl = tk.Label(row, text='0.00', width=6, anchor='e')
@@ -129,119 +144,169 @@ class DAvatarApp:
         # Buttons
         btn_frame = tk.Frame(self.root)
         btn_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
-        self.btn_start = tk.Button(btn_frame, text='Avvia', command=self._start, width=12)
+        self.btn_start = tk.Button(
+            btn_frame, text='Avvia tracking', command=self._start_tracking, width=16
+        )
         self.btn_start.pack(side=tk.LEFT, padx=4)
         self.btn_stop = tk.Button(
-            btn_frame, text='Ferma', command=self._stop_app, width=12, state='disabled'
+            btn_frame,
+            text='Ferma tracking',
+            command=self._stop_tracking,
+            width=16,
+            state='disabled',
         )
         self.btn_stop.pack(side=tk.LEFT, padx=4)
-        self.status_var = tk.StringVar(value='Pronto')
+        self.status_var = tk.StringVar(value='Camera attiva — premi Avvia tracking')
         tk.Label(btn_frame, textvariable=self.status_var, anchor='e').pack(side=tk.RIGHT)
 
-    # -- start / stop -----------------------------------------------------
+    # -- camera (always on) ----------------------------------------------
 
-    def _start(self) -> None:
-        if self._running:
+    def _start_camera(self) -> None:
+        """Start the camera preview thread immediately on app launch."""
+        self._cam_stop.clear()
+        self._cam_thread = threading.Thread(target=self._cam_loop, daemon=True)
+        self._cam_thread.start()
+
+    def _cam_loop(self) -> None:
+        """Yield frames from the camera for the preview (no tracking)."""
+        try:
+            for _t, rgb in camera_stream_frames(device=0, fps=30.0, size=_CAM_SIZE, gray=False):
+                if self._cam_stop.is_set():
+                    break
+                frame_bgr = (np.clip(rgb, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
+                frame_bgr = frame_bgr[..., ::-1]  # RGB → BGR
+                with self._lock:
+                    self._latest_frame = frame_bgr
+                time.sleep(1.0 / 30.0)
+        except Exception as exc:  # pragma: no cover - runtime errors shown in UI
+            self.status_var.set(f'Errore camera: {exc}')
+        finally:
+            with self._lock:
+                self._latest_frame = None
+
+    # -- tracking + VMC (started by "Avvia") -----------------------------
+
+    def _start_tracking(self) -> None:
+        """Start the native tracker and optional VMC sending."""
+        if self._tracking:
             return
-        self._running = True
-        self._stop.clear()
+        if self._latest_frame is None:
+            self.status_var.set('Errore: camera non disponibile')
+            return
+
+        self._tracking = True
+        self._track_stop.clear()
+        self._calibrating = True
+        self._calib_frames_done = 0
         self._latest_params = {}
-        self._latest_frame = None
-        self._latest_stabilised = None
+
         self.btn_start.configure(state='disabled')
         self.btn_stop.configure(state='normal')
-        self.status_var.set('Avvio camera e calibrazione…')
-        self._thread = threading.Thread(target=self._run_loop, daemon=True)
-        self._thread.start()
-        self.root.after(100, self._refresh_ui)
+        self.status_var.set('Avvio tracking e calibrazione (3 s)…')
 
-    def _stop_app(self) -> None:
-        if not self._running:
+        try:
+            self._open_vmc()
+        except Exception as exc:  # pragma: no cover
+            self.status_var.set(f'VMC non disponibile: {exc}')
+
+        self._track_thread = threading.Thread(target=self._track_loop, daemon=True)
+        self._track_thread.start()
+
+    def _stop_tracking(self) -> None:
+        """Stop tracking and VMC, keep camera running."""
+        if not self._tracking:
             return
-        self._running = False
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=2.0)
-            self._thread = None
+        self._tracking = False
+        self._track_stop.set()
+        if self._track_thread is not None:
+            self._track_thread.join(timeout=2.0)
+            self._track_thread = None
         self._close_vmc()
         self._tracker = None
         self.btn_start.configure(state='normal')
         self.btn_stop.configure(state='disabled')
-        self.status_var.set('Fermato')
-        self.video_label.configure(image='', text='video (stopped)')
-        self.avatar_label.configure(image='', text='avatar')
+        self.status_var.set('Tracking fermato — camera attiva')
+        with self._lock:
+            self._latest_params = {}
+            self._calibrating = True
+            self._calib_frames_done = 0
 
-    # -- main loop --------------------------------------------------------
-
-    def _run_loop(self) -> None:
-        """Camera capture, calibration, tracking, VMC send (runs in thread)."""
+    def _track_loop(self) -> None:
+        """Run the native tracker on the latest camera frame and send VMC."""
         try:
-            self._open_vmc()
-            self._tracker = NativeTracker(max_step=0.1, max_step_deg=5.0, calibrate_frames=90)
+            self._tracker = NativeTracker(
+                max_step=0.1, max_step_deg=5.0, calibrate_frames=_CALIBRATION_FRAMES
+            )
 
-            # Calibration: first ~3 seconds at 30 fps = ~90 frames.
-            # During calibration the tracker builds its background model;
-            # we set the face box manually once a stable track exists.
-            calibrated = False
+            while not self._track_stop.is_set():
+                with self._lock:
+                    frame = self._latest_frame.copy() if self._latest_frame is not None else None  # noqa: E501
+                if frame is None:
+                    time.sleep(0.01)
+                    continue
 
-            for calib_frames, (_t, rgb) in enumerate(
-                camera_stream_frames(device=0, fps=30.0, size=_CAM_SIZE, gray=False)
-            ):
-                if self._stop.is_set():
-                    break
-
-                # rgb is float32 [0,1] RGB → convert to uint8 BGR for OpenCV/PIL
-                frame_bgr = (np.clip(rgb, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
-                frame_bgr = frame_bgr[..., ::-1]  # RGB → BGR
-
-                gray = (np.clip(rgb, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
-                gray = gray.mean(axis=2).astype(np.uint8)
-
-                # Tracker needs color/gray frame; it converts internally.
-                params = self._tracker(frame_bgr)
+                params = self._tracker(frame)
 
                 with self._lock:
                     self._latest_params = params
-                    self._latest_frame = frame_bgr
-                    self._latest_stabilised = (
-                        frame_bgr  # tracker provides stabilised signal via box
+                    self._calib_frames_done = (
+                        self._tracker._n_seen if hasattr(self._tracker, '_n_seen') else 0
                     )
+                    if self._calib_frames_done >= _CALIBRATION_FRAMES:
+                        self._calibrating = False
 
                 if self._vmc is not None:
                     self._vmc.send_frame(params)
 
-                if not calibrated and calib_frames >= self._tracker.calibrate_frames:
-                    calibrated = True
-                    self.status_var.set('Calibrato — avatar attivo')
-
                 time.sleep(1.0 / 30.0)
 
         except Exception as exc:  # pragma: no cover - runtime errors shown in UI
-            self.status_var.set(f'Errore: {exc}')
+            self.status_var.set(f'Errore tracking: {exc}')
         finally:
-            self._running = False
-            self.root.after(0, self._stop_app)
+            self._tracking = False
+            self.root.after(0, self._stop_tracking)
 
-    # -- UI refresh -------------------------------------------------------
+    # -- VMC -------------------------------------------------------------
+
+    def _open_vmc(self) -> None:
+        try:
+            self._vmc = VmcSender(host='127.0.0.1', port=self.vmc_port)
+        except ImportError:
+            self._vmc = None
+            self.status_var.set('python-osc non installato: VMC disattivato')
+
+    def _close_vmc(self) -> None:
+        if self._vmc is not None:
+            with contextlib.suppress(Exception):
+                self._vmc.close()
+            self._vmc = None
+
+    # -- UI refresh ------------------------------------------------------
 
     def _refresh_ui(self) -> None:
-        if not self._running:
-            return
         with self._lock:
-            params = dict(self._latest_params)
             frame = self._latest_frame.copy() if self._latest_frame is not None else None
+            params = dict(self._latest_params)
+            calibrating = self._calibrating
+            calib_done = self._calib_frames_done
 
         if frame is not None:
             self._show_video(frame)
-            self._show_avatar(params)
-            self._update_bars(params)
+            if self._tracking:
+                self._show_avatar(params)
+                self._update_bars(params)
+
+        if calibrating and self._tracking:
+            remaining = max(0, _CALIBRATION_FRAMES - calib_done)
+            self.status_var.set(f'Calibrazione in corso: {remaining // 30 + 1}s…')
+        elif self._tracking and not calibrating:
+            self.status_var.set('Tracking attivo — avatar in diretta')
 
         self.root.after(33, self._refresh_ui)
 
     def _show_video(self, frame_bgr: np.ndarray) -> None:
         if not _TK_AVAILABLE:
             return
-        # Resize to fit the label area while keeping aspect
         h, w = frame_bgr.shape[:2]
         max_w, max_h = 320, 240
         scale = min(max_w / w, max_h / h)
@@ -251,7 +316,7 @@ class DAvatarApp:
         img = Image.fromarray(rgb)
         photo = ImageTk.PhotoImage(image=img)
         self.video_label.configure(image=photo, text='')
-        self.video_label.image = photo  # type: ignore[attr-defined]  # keep reference
+        self.video_label.image = photo  # type: ignore[attr-defined]
 
     def _show_avatar(self, params: dict[str, float]) -> None:
         avatar = draw_avatar(params, size=_AVATAR_SIZE)
@@ -275,20 +340,15 @@ class DAvatarApp:
             self._param_vars[name].set(val)
             self._param_labels[name].configure(text=f'{val:.2f}')
 
-    # -- VMC --------------------------------------------------------------
-
-    def _open_vmc(self) -> None:
-        try:
-            self._vmc = VmcSender(host='127.0.0.1', port=self.vmc_port)
-        except ImportError:
-            self._vmc = None
-            self.status_var.set('python-osc non installato: VMC disattivato')
-
-    def _close_vmc(self) -> None:
-        if self._vmc is not None:
-            with contextlib.suppress(Exception):
-                self._vmc.close()
-            self._vmc = None
+    def destroy(self) -> None:
+        """Clean shutdown: stop camera and tracking threads."""
+        self._cam_stop.set()
+        self._track_stop.set()
+        if self._cam_thread is not None:
+            self._cam_thread.join(timeout=2.0)
+        if self._track_thread is not None:
+            self._track_thread.join(timeout=2.0)
+        self._close_vmc()
 
 
 def cv2_resize(img: np.ndarray, size: tuple[int, int]) -> np.ndarray:
@@ -312,12 +372,6 @@ def cv2_cvtColor_rgb(bgr: np.ndarray) -> np.ndarray:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='D-Avatar live app')
-    parser.add_argument(
-        '--detector',
-        choices=['mediapipe'],
-        default=None,
-        help='detector to use (mediapipe path is OFF by default)',
-    )
     parser.add_argument('--vmc-port', type=int, default=39539, help='VMC/UDP port (default 39539)')
     args = parser.parse_args()
 
@@ -326,7 +380,8 @@ def main() -> None:
         sys.exit(1)
 
     root = tk.Tk()
-    DAvatarApp(root, vmc_port=args.vmc_port, use_mediapipe=(args.detector == 'mediapipe'))
+    app = DAvatarApp(root, vmc_port=args.vmc_port)
+    root.protocol('WM_DELETE_WINDOW', app.destroy)
     root.mainloop()
 
 
