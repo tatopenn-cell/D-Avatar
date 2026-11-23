@@ -46,7 +46,7 @@ class NativeTracker:
         self,
         max_step: float = 0.1,
         max_step_deg: float = 5.0,
-        calibrate_frames: int = 90,
+        calibrate_frames: int = 0,
     ) -> None:
         self.max_step = float(max_step)
         self.max_step_deg = float(max_step_deg)
@@ -71,39 +71,52 @@ class NativeTracker:
         mouth_open, eye_l, eye_r (0, 1), blink (0 or 1).
         """
         img = self._to_gray(frame)
+        h, w = img.shape[:2]
         self._n_seen += 1
 
-        # 1. Find / track the face box (largest moving object)
+        # 1. Find / track the face box (largest moving object).
+        # Fallback: centred box covering ~60% of the frame so it works
+        # immediately even when the head is still.
         tracks = self.mot.transform_one(img)
         box = self._pick_face_box(tracks)
         if box is not None:
             self._face_box = box
-        if self._face_box is None or self._n_seen < self.calibrate_frames:
+        elif self._face_box is None:
+            cx, cy = w // 2, h // 2
+            bw, bh = int(w * 0.6), int(h * 0.7)
+            self._face_box = (
+                cx - bw // 2,
+                cy - bh // 2,
+                cx + bw // 2,
+                cy + bh // 2,
+            )
+
+        if self._n_seen < self.calibrate_frames:
             return self._neutral()
 
         # 2. ROIs inside the face box
         x0, y0, x1, y1 = self._face_box
-        w = max(1, x1 - x0)
-        h = max(1, y1 - y0)
-        eye_h = max(1, int(h * 0.14))
-        eye_w = max(1, int(w * 0.10))
+        bw = max(1, x1 - x0)
+        bh = max(1, y1 - y0)
+        eye_h = max(1, int(bh * 0.14))
+        eye_w = max(1, int(bw * 0.10))
         l_eye = (
-            x0 + int(w * 0.20),
-            y0 + int(h * 0.30),
-            x0 + int(w * 0.20) + eye_w,
-            y0 + int(h * 0.30) + eye_h,
+            x0 + int(bw * 0.20),
+            y0 + int(bh * 0.30),
+            x0 + int(bw * 0.20) + eye_w,
+            y0 + int(bh * 0.30) + eye_h,
         )
         r_eye = (
-            x0 + int(w * 0.70) - eye_w,
-            y0 + int(h * 0.30),
-            x0 + int(w * 0.70),
-            y0 + int(h * 0.30) + eye_h,
+            x0 + int(bw * 0.70) - eye_w,
+            y0 + int(bh * 0.30),
+            x0 + int(bw * 0.70),
+            y0 + int(bh * 0.30) + eye_h,
         )
         mouth = (
-            x0 + int(w * 0.35),
-            y0 + int(h * 0.70),
-            x0 + int(w * 0.65),
-            y0 + int(h * 0.70) + max(1, int(h * 0.08)),
+            x0 + int(bw * 0.35),
+            y0 + int(bh * 0.70),
+            x0 + int(bw * 0.65),
+            y0 + int(bh * 0.70) + max(1, int(bh * 0.08)),
         )
 
         # 3. Signals from primitives
