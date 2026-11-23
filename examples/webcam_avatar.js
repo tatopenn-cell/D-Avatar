@@ -795,10 +795,13 @@ function tick(now) {
         fetch('http://127.0.0.1:5000/registration/transform', {method:'POST', headers:{'Content-Type':'application/json'}, body}).then(r=>r.json()).catch(()=>({})),
         fetch('http://127.0.0.1:5000/stabilizer/transform', {method:'POST', headers:{'Content-Type':'application/json'}, body}).then(r=>r.json()).catch(()=>({})),
         fetch('http://127.0.0.1:5000/tracker/moving', {method:'POST', headers:{'Content-Type':'application/json'}, body}).then(r=>r.json()).catch(()=>({})),
-        fetch('http://127.0.0.1:5000/adwin/update', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({value: motion_max})}).then(r=>r.json()).catch(()=>({})),
-        fetch('http://127.0.0.1:5000/shield/transform', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({points:[[80,80]], confidence:[1]})}).then(r=>r.json()).catch(()=>({})),
-      ]).then(([features, motion, energy, registration, stabilizer, tracker, adwin, shield]) => {
-        state.apiParams = {...features, ...motion, ...energy, ...registration, ...stabilizer, ...tracker, ...adwin, ...shield};
+      ]).then(([features, motion, energy, registration, stabilizer, tracker]) => {
+        state.apiParams = {...features, ...motion, ...energy, ...registration, ...stabilizer, ...tracker};
+
+        // ADWIN e Shield usano motion_max (già disponibile dopo le risposte sopra)
+        const motion_max = state.apiParams.motion_max || 0;
+        fetch('http://127.0.0.1:5000/adwin/update', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({value: motion_max})}).then(r=>r.json()).catch(()=>({}));
+        fetch('http://127.0.0.1:5000/shield/transform', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({points:[[80,80]], confidence:[1]})}).then(r=>r.json()).catch(()=>({}));
       });
     }
 
