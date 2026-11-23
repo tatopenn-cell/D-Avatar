@@ -759,7 +759,7 @@ function tick(now) {
       state.hands.send({ image: els.video });
     }
 
-    // Invia frame all'API Dense-Armor per ottenere parametri reali
+    // Invia frame all'API Dense-Armor (features, motion, energy) in parallelo
     if (now - state.lastApiSend > 150) {
       state.lastApiSend = now;
       const tempCanvas = document.createElement('canvas');
@@ -769,13 +769,14 @@ function tick(now) {
       tctx.drawImage(els.video, 0, 0, 160, 120);
       const imgData = tctx.getImageData(0, 0, 160, 120);
       const arr = Array.from(imgData.data);
-      fetch('http://127.0.0.1:5000/features/transform', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({array: arr})
-      }).then(r => r.json()).then(data => {
-        state.apiParams = data;
-      }).catch(() => {});
+      const body = JSON.stringify({array: arr});
+      Promise.all([
+        fetch('http://127.0.0.1:5000/features/transform', {method:'POST', headers:{'Content-Type':'application/json'}, body}).then(r=>r.json()).catch(()=>({})),
+        fetch('http://127.0.0.1:5000/motion/global', {method:'POST', headers:{'Content-Type':'application/json'}, body}).then(r=>r.json()).catch(()=>({})),
+        fetch('http://127.0.0.1:5000/motion/energy', {method:'POST', headers:{'Content-Type':'application/json'}, body}).then(r=>r.json()).catch(()=>({})),
+      ]).then(([features, motion, energy]) => {
+        state.apiParams = {...features, ...motion, ...energy};
+      });
     }
 
     // Usa i parametri dall'API per animare l'avatar
@@ -783,15 +784,18 @@ function tick(now) {
     const contrast = state.apiParams.contrast || 50;
     const cx = state.apiParams.centroid_x || 0.5;
     const cy = state.apiParams.centroid_y || 0.5;
+    const dx = state.apiParams.dx || 0;
+    const dy = state.apiParams.dy || 0;
+    const motion_max = state.apiParams.motion_max || 0;
 
     const params = {
-      head_yaw: (cx - 0.5) * 60,
-      head_pitch: (cy - 0.5) * 60,
+      head_yaw: (cx - 0.5) * 60 + dx * 5,
+      head_pitch: (cy - 0.5) * 60 + dy * 5,
       head_roll: 0,
-      mouth_open: Math.min(1, Math.max(0, (128 - mean) / 128)),
+      mouth_open: Math.min(1, Math.max(0, (128 - mean) / 128 + motion_max / 500)),
       eye_l: Math.min(1, Math.max(0, contrast / 100)),
       eye_r: Math.min(1, Math.max(0, contrast / 100)),
-      blink: 0,
+      blink: motion_max > 200 ? 1 : 0,
       gaze_x: (cx - 0.5) * 2,
       gaze_y: (cy - 0.5) * 2,
       smile: Math.min(1, Math.max(0, contrast / 200)),
