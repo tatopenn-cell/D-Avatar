@@ -21,6 +21,7 @@ const state = {
   fpsTime: 0,
   hands: null,
   handsResults: null,
+  handsReady: false,
   syntheticTime: 0,
   mouseHand: { x: null, y: null, active: false },
 };
@@ -165,12 +166,26 @@ async function startWebcam() {
   }
 }
 
+function loadHandsScript() {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1650995939/hands.js';
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('CDN bloccato o non raggiungibile'));
+    document.head.appendChild(script);
+  });
+}
+
 async function initHands() {
   try {
+    if (!window.Hands) {
+      await loadHandsScript();
+    }
     const Hands = window.Hands;
     if (!Hands) {
-      console.warn('MediaPipe Hands non disponibile (CDN bloccato o non caricato)');
+      console.warn('MediaPipe Hands non disponibile');
       state.hands = null;
+      state.handsReady = false;
       return;
     }
     state.hands = new Hands({
@@ -182,10 +197,24 @@ async function initHands() {
       minTrackingConfidence: 0.5,
     });
     state.hands.onResults(onHandsResults);
+    state.handsReady = true;
+    els.handBadge.textContent = 'HAND: PRONTO';
+    els.handBadge.className = 'pill-small pill-green';
   } catch (e) {
     console.warn('Impossibile inizializzare MediaPipe Hands:', e);
     state.hands = null;
+    state.handsReady = false;
+    els.handBadge.textContent = 'HAND: ERRORE';
+    els.handBadge.className = 'pill-small pill-red';
   }
+}
+
+async function retryHands() {
+  state.hands = null;
+  state.handsReady = false;
+  els.handBadge.textContent = 'HAND: CARICAMENTO...';
+  els.handBadge.className = 'pill-small pill-amber';
+  await initHands();
 }
 
 function onHandsResults(results) {
@@ -336,6 +365,11 @@ function initEvents() {
   $('sw-black').addEventListener('click', () => setBg('black'));
   $('sw-green').addEventListener('click', () => setBg('green'));
   $('sw-trans').addEventListener('click', () => setBg('trans'));
+
+  // Retry tracciamento mani (MediaPipe)
+  $('btn-retry-hands').addEventListener('click', async () => {
+    await retryHands();
+  });
 
   // Tracciamento mano sintetico (fallback quando MediaPipe non è disponibile)
   els.canvas.addEventListener('mousemove', (e) => {
