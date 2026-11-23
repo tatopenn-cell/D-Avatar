@@ -629,7 +629,7 @@ function drawHands(ctx, w, h) {
 }
 
 /* ---------- Placeholder sintetico quando non c'è webcam ---------- */
-function drawSyntheticPlaceholder(ctx, w, h, t) {
+function drawSyntheticPlaceholder(ctx, w, h) {
   ctx.fillStyle = '#0a0a12';
   ctx.fillRect(0, 0, w, h);
   ctx.strokeStyle = '#262C3A';
@@ -640,19 +640,6 @@ function drawSyntheticPlaceholder(ctx, w, h, t) {
   ctx.textAlign = 'center';
   ctx.fillText('Webcam non disponibile', w / 2, h / 2 - 20);
   ctx.fillText('Usa i controlli a destra per disegnare', w / 2, h / 2 + 5);
-  // Avatar sintetico che respira
-  const cx = w / 2, cy = h / 2 + Math.sin(t * 0.002) * 3;
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.fillStyle = '#FDBA74';
-  ctx.beginPath(); ctx.arc(0, -10, 100, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = '#111827'; ctx.lineWidth = 4; ctx.stroke();
-  ctx.fillStyle = '#FFFFFF';
-  ctx.beginPath(); ctx.arc(-35, -20, 14, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.arc(35, -20, 14, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#F472B6';
-  ctx.beginPath(); ctx.arc(0, 20, 18, 0, Math.PI); ctx.fill();
-  ctx.restore();
 }
 
 /* ---------- Loop ---------- */
@@ -681,31 +668,17 @@ function tick(now) {
   } else {
     ctx.fillStyle = '#0a0a12';
     ctx.fillRect(0, 0, w, h);
-    if (state.syntheticTime !== undefined) {
-      state.syntheticTime += 16;
-      drawSyntheticPlaceholder(ctx, w, h, state.syntheticTime);
-    }
+    drawSyntheticPlaceholder(ctx, w, h);
   }
 
+  // Disegna layer utente (se c'è qualcosa disegnato)
   const cur = state.layers[state.currentLayer];
   if (cur && cur.canvas.width > 0) {
     ctx.drawImage(cur.canvas, 0, 0, w, h);
   }
 
-  const params = {
-    head_yaw: Math.sin(now * 0.008) * 8,
-    head_pitch: Math.cos(now * 0.006) * 5,
-    head_roll: Math.sin(now * 0.004) * 4,
-    mouth_open: (Math.sin(now * 0.01) + 1) / 2 * 0.4,
-    eye_l: 1, eye_r: 1,
-    blink: 0,
-    gaze_x: Math.sin(now * 0.012) * 0.4,
-    gaze_y: Math.cos(now * 0.009) * 0.3,
-    smile: (Math.sin(now * 0.01) + 1) / 2 * 0.6,
-    breathing: Math.sin(now * 0.0015) * 2.5,
-    hairBounce: Math.sin(now * 0.002) * 1.5,
-  };
-  drawAvatar(ctx, w, h, params);
+  // Disegna mani SOLO se ci sono landmark reali (MediaPipe o mouse)
+  drawHands(ctx, w, h);
 }
 
 init();
