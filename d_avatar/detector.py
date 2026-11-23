@@ -30,11 +30,23 @@ import numpy as np
 from d_avatar.mesh import iris_centres, mesh_to_68
 
 
+def as_uint8(rgb: np.ndarray) -> np.ndarray:
+    """RGB image as bytes in 0-255: a float image is read as values in [0, 1]."""
+    arr = np.asarray(rgb)
+    if arr.dtype == np.uint8:
+        out: np.ndarray = np.ascontiguousarray(arr)
+        return out
+    scaled: np.ndarray = np.ascontiguousarray(
+        (np.clip(arr, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
+    )
+    return scaled
+
+
 def _to_mp_image(rgb: np.ndarray) -> Any:
     """Wrap an RGB array in a MediaPipe Image; ``mediapipe`` is imported here only."""
     import mediapipe as mp  # type: ignore[import-untyped]  # noqa: PLC0415
 
-    return mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb))
+    return mp.Image(image_format=mp.ImageFormat.SRGB, data=as_uint8(rgb))
 
 
 class FaceDetector:

@@ -8,7 +8,7 @@ normalized ``x``/``y``).
 
 import numpy as np
 
-from d_avatar.detector import FaceDetector
+from d_avatar.detector import FaceDetector, as_uint8
 from d_avatar.mesh import mesh_to_68
 from d_avatar.shield import FaceShield
 
@@ -90,3 +90,17 @@ def test_no_face_frame_holds_previous_point_under_shield():
     without = shield.transform_one(noface_frame)
     # Predict-only during one-frame occlusion keeps the point close.
     assert np.allclose(without['points'], with_face['points'], atol=1.0)
+
+
+def test_as_uint8_reads_float_images_as_unit_range():
+    img = np.zeros((2, 2, 3), dtype=np.float32)
+    img[0, 0] = [1.0, 0.5, 0.0]
+    out = as_uint8(img)
+    assert out.dtype == np.uint8
+    assert list(out[0, 0]) == [255, 128, 0]
+
+
+def test_as_uint8_keeps_bytes_and_clips_floats():
+    raw = np.full((2, 2, 3), 7, dtype=np.uint8)
+    assert np.array_equal(as_uint8(raw), raw)
+    assert as_uint8(np.full((1, 1, 3), 2.0))[0, 0, 0] == 255
