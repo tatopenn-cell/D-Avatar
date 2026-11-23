@@ -9,6 +9,7 @@ theme:
 nav:
   - Home: index.md
   - Dense-Armor map: dense_armor_map.md
+  - Tracking without a model: tracking_without_a_model.md
 
 plugins:
   - search
