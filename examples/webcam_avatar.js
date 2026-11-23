@@ -24,6 +24,8 @@ const state = {
   handsReady: false,
   syntheticTime: 0,
   mouseHand: { x: null, y: null, active: false },
+  apiParams: {},
+  lastApiSend: 0,
 };
 
 const els = {};
@@ -756,10 +758,67 @@ function tick(now) {
     if (state.hands && els.video.readyState >= 2) {
       state.hands.send({ image: els.video });
     }
+
+    // Invia frame all'API Dense-Armor per ottenere parametri reali
+    if (now - state.lastApiSend > 150) {
+      state.lastApiSend = now;
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = 160;
+      tempCanvas.height = 120;
+      const tctx = tempCanvas.getContext('2d');
+      tctx.drawImage(els.video, 0, 0, 160, 120);
+      const imgData = tctx.getImageData(0, 0, 160, 120);
+      const arr = Array.from(imgData.data);
+      fetch('http://127.0.0.1:5000/features/transform', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({array: arr})
+      }).then(r => r.json()).then(data => {
+        state.apiParams = data;
+      }).catch(() => {});
+    }
+
+    // Usa i parametri dall'API per animare l'avatar
+    const mean = state.apiParams.mean || 128;
+    const contrast = state.apiParams.contrast || 50;
+    const cx = state.apiParams.centroid_x || 0.5;
+    const cy = state.apiParams.centroid_y || 0.5;
+
+    const params = {
+      head_yaw: (cx - 0.5) * 60,
+      head_pitch: (cy - 0.5) * 60,
+      head_roll: 0,
+      mouth_open: Math.min(1, Math.max(0, (128 - mean) / 128)),
+      eye_l: Math.min(1, Math.max(0, contrast / 100)),
+      eye_r: Math.min(1, Math.max(0, contrast / 100)),
+      blink: 0,
+      gaze_x: (cx - 0.5) * 2,
+      gaze_y: (cy - 0.5) * 2,
+      smile: Math.min(1, Math.max(0, contrast / 200)),
+      breathing: Math.sin(now * 0.0015) * 2.5,
+      hairBounce: Math.sin(now * 0.002) * 1.5,
+    };
+    drawAvatar(ctx, w, h, params);
+
   } else {
     ctx.fillStyle = '#0a0a12';
     ctx.fillRect(0, 0, w, h);
     drawSyntheticPlaceholder(ctx, w, h);
+
+    const params = {
+      head_yaw: Math.sin(now * 0.008) * 8,
+      head_pitch: Math.cos(now * 0.006) * 5,
+      head_roll: Math.sin(now * 0.004) * 4,
+      mouth_open: (Math.sin(now * 0.01) + 1) / 2 * 0.4,
+      eye_l: 1, eye_r: 1,
+      blink: 0,
+      gaze_x: Math.sin(now * 0.012) * 0.4,
+      gaze_y: Math.cos(now * 0.009) * 0.3,
+      smile: (Math.sin(now * 0.01) + 1) / 2 * 0.6,
+      breathing: Math.sin(now * 0.0015) * 2.5,
+      hairBounce: Math.sin(now * 0.002) * 1.5,
+    };
+    drawAvatar(ctx, w, h, params);
   }
 
   // Disegna layer utente (se c'è qualcosa disegnato)
