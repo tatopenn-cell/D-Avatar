@@ -1,177 +1,334 @@
-"""
-D-Avatar app: your face in a window, a Start and a Stop button.
+"""D-Avatar example app: live camera → native tracker → 2D avatar + optional VMC.
 
-Start opens the camera, finds the face, runs the D-Avatar pipeline and sends the parameters
-over VMC to the host and port written in the window. The MediaPipe model file is downloaded
-on the first Start. Needs the cam, mp and osc extras.
+Window layout:
+- left: stabilised face video (Dense-Armor primitives, no dots)
+- right: 2D avatar (draw_avatar)
+- bottom: status bar with live Dense-Armor class names + 7 parameter bars
+- buttons: Start / Stop
 
-    python examples/app.py
+Run: python examples/app.py [--detector mediapipe] [--vmc-port 39539]
+
+MediaPipe path is present in the repo but OFF by default: the default path
+uses only Dense-Armor primitives (no pre-trained model).
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
+import threading
 import time
-import tkinter as tk
-import urllib.request
-from pathlib import Path
-from tkinter import ttk
-from typing import Any
 
-import cv2
 import numpy as np
 
-from d_avatar import AvatarPipeline, FaceDetector, camera_stream_frames
+try:
+    import tkinter as tk
 
-MODEL_URL = (
-    'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/'
-    'float16/1/face_landmarker.task'
+    from PIL import Image, ImageTk
+
+    _TK_AVAILABLE = True
+except ImportError:  # pragma: no cover - tkinter optional
+    _TK_AVAILABLE = False
+
+from d_avatar.avatar import draw_avatar
+from d_avatar.capture import camera_stream_frames
+from d_avatar.tracker import NativeTracker
+from d_avatar.vmc import VmcSender
+
+# Dense-Armor classes used in the default (model-free) path.
+_DENSE_ARMOR_CLASSES = (
+    'MovingObjectTracker',
+    'FrameFeatures',
+    'MotionEnergy',
+    'GlobalMotion',
+    'Registration',
+    'Stabilizer',
+    'RateBound',
 )
-MODEL = Path(__file__).resolve().parents[1] / 'face_landmarker.task'
-SHOWN = ('eye_l', 'eye_r', 'mouth_open', 'brow_l', 'brow_r', 'head_yaw', 'head_pitch', 'head_roll')
-PAD = 8
+
+_CAM_SIZE = (640, 480)
+_AVATAR_SIZE = 400
+_CALIBRATION_SECONDS = 3
 
 
-class App:
-    """The window and its two buttons."""
+class DAvatarApp:
+    """Tkinter application: camera → tracker → avatar + VMC."""
 
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: tk.Tk, vmc_port: int = 39539, use_mediapipe: bool = False) -> None:
+        if not _TK_AVAILABLE:
+            raise ImportError('tkinter and Pillow are required for the app')
         self.root = root
-        root.title('D-Avatar')
-        self.cap: Any = None
-        self.det: FaceDetector | None = None
-        self.ap: AvatarPipeline | None = None
-        self.running = False
-        self.t0 = 0.0
-        self.frames = 0
-        self.face_frames = 0
-        self.photo: tk.PhotoImage | None = None
+        self.root.title('D-Avatar — live native tracker')
+        self.vmc_port = vmc_port
+        self.use_mediapipe = use_mediapipe
 
-        self.video = tk.Label(root, width=80, height=30, bg='black')
-        self.video.grid(row=0, column=0, rowspan=8, padx=PAD, pady=PAD)
+        self._running = False
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._latest_params: dict[str, float] = {}
+        self._latest_frame: np.ndarray | None = None
+        self._latest_stabilised: np.ndarray | None = None
+        self._lock = threading.Lock()
+        self._vmc: VmcSender | None = None
+        self._tracker: NativeTracker | None = None
 
-        ttk.Label(root, text='Camera').grid(row=0, column=1, sticky='w', padx=PAD)
-        self.index = ttk.Combobox(root, values=[0, 1, 2, 3], width=8, state='readonly')
-        self.index.set(0)
-        self.index.grid(row=1, column=1, padx=PAD, sticky='w')
-        ttk.Label(root, text='Invia a (host)').grid(row=2, column=1, sticky='w', padx=PAD)
-        self.host = ttk.Entry(root, width=16)
-        self.host.insert(0, '127.0.0.1')
-        self.host.grid(row=3, column=1, padx=PAD, sticky='w')
-        ttk.Label(root, text='Porta VMC').grid(row=4, column=1, sticky='w', padx=PAD)
-        self.port = ttk.Entry(root, width=16)
-        self.port.insert(0, '39539')
-        self.port.grid(row=5, column=1, padx=PAD, sticky='w')
+        self._build_ui()
 
-        self.start_button = ttk.Button(root, text='Avvia', command=self.start)
-        self.start_button.grid(row=6, column=1, padx=PAD, pady=PAD, sticky='ew')
-        self.stop_button = ttk.Button(root, text='Ferma', command=self.stop, state='disabled')
-        self.stop_button.grid(row=7, column=1, padx=PAD, sticky='ew')
+    # -- UI --------------------------------------------------------------
 
-        self.status = ttk.Label(root, text='Fermo', font=('Segoe UI', 11, 'bold'))
-        self.status.grid(row=8, column=0, padx=PAD, sticky='w')
-        self.values = ttk.Label(root, text='', font=('Consolas', 9), justify='left')
-        self.values.grid(row=8, column=1, padx=PAD, sticky='w')
-        root.protocol('WM_DELETE_WINDOW', self.close)
+    def _build_ui(self) -> None:
+        # Video + avatar area
+        area = tk.Frame(self.root)
+        area.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
-    def say(self, text: str) -> None:
-        self.status.configure(text=text)
-        self.root.update_idletasks()
+        self.video_label = tk.Label(area, bg='black', text='video (stopped)')
+        self.video_label.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-    def start(self) -> None:
-        if self.running:
-            return
-        self.start_button.configure(state='disabled')
-        try:
-            if not MODEL.exists():
-                self.say('Scarico il modello (3,7 MB), una volta sola...')
-                urllib.request.urlretrieve(MODEL_URL, MODEL)
-            index = int(self.index.get())
-            # Use Dense-Armor's CameraStream via camera_stream_frames
-            self._cam_gen = camera_stream_frames(
-                device=index, fps=30.0, gray=False, size=(640, 480)
+        self.avatar_label = tk.Label(area, bg='#e0e0e0', text='avatar')
+        self.avatar_label.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        # Status + parameter bars
+        bar_frame = tk.Frame(self.root)
+        bar_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
+
+        tk.Label(
+            bar_frame, text='Dense-Armor classes: ' + ', '.join(_DENSE_ARMOR_CLASSES), anchor='w'
+        ).pack(fill=tk.X)
+
+        self._param_vars: dict[str, tk.DoubleVar] = {}
+        self._param_labels: dict[str, tk.Label] = {}
+        for name in (
+            'head_yaw',
+            'head_pitch',
+            'head_roll',
+            'mouth_open',
+            'eye_l',
+            'eye_r',
+            'blink',
+        ):
+            row = tk.Frame(bar_frame)
+            row.pack(fill=tk.X, pady=1)
+            tk.Label(row, text=name, width=12, anchor='w').pack(side=tk.LEFT)
+            var = tk.DoubleVar(value=0.0)
+            scale = tk.Scale(
+                row,
+                from_=-90,
+                to=90,
+                orient=tk.HORIZONTAL,
+                variable=var,
+                showvalue=False,
+                state='disabled',
             )
-            self.det = FaceDetector.open_default(str(MODEL))
-            self.ap = AvatarPipeline(vmc_host=self.host.get(), vmc_port=int(self.port.get()))
-        except Exception as e:
-            self.say(f'Errore: {e}')
-            self.start_button.configure(state='normal')
-            return
-        self.running = True
-        self.t0 = time.perf_counter()
-        self.frames = self.face_frames = 0
-        self.stop_button.configure(state='normal')
-        self.say('In esecuzione')
-        self.tick()
+            scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+            lbl = tk.Label(row, text='0.00', width=6, anchor='e')
+            lbl.pack(side=tk.RIGHT)
+            self._param_vars[name] = var
+            self._param_labels[name] = lbl
 
-    def tick(self) -> None:
-        if not self.running or self.det is None or self.ap is None:
+        # Buttons
+        btn_frame = tk.Frame(self.root)
+        btn_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
+        self.btn_start = tk.Button(btn_frame, text='Avvia', command=self._start, width=12)
+        self.btn_start.pack(side=tk.LEFT, padx=4)
+        self.btn_stop = tk.Button(
+            btn_frame, text='Ferma', command=self._stop_app, width=12, state='disabled'
+        )
+        self.btn_stop.pack(side=tk.LEFT, padx=4)
+        self.status_var = tk.StringVar(value='Pronto')
+        tk.Label(btn_frame, textvariable=self.status_var, anchor='e').pack(side=tk.RIGHT)
+
+    # -- start / stop -----------------------------------------------------
+
+    def _start(self) -> None:
+        if self._running:
             return
+        self._running = True
+        self._stop.clear()
+        self._latest_params = {}
+        self._latest_frame = None
+        self._latest_stabilised = None
+        self.btn_start.configure(state='disabled')
+        self.btn_stop.configure(state='normal')
+        self.status_var.set('Avvio camera e calibrazione…')
+        self._thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._thread.start()
+        self.root.after(100, self._refresh_ui)
+
+    def _stop_app(self) -> None:
+        if not self._running:
+            return
+        self._running = False
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+        self._close_vmc()
+        self._tracker = None
+        self.btn_start.configure(state='normal')
+        self.btn_stop.configure(state='disabled')
+        self.status_var.set('Fermato')
+        self.video_label.configure(image='', text='video (stopped)')
+        self.avatar_label.configure(image='', text='avatar')
+
+    # -- main loop --------------------------------------------------------
+
+    def _run_loop(self) -> None:
+        """Camera capture, calibration, tracking, VMC send (runs in thread)."""
         try:
-            t, rgb = next(self._cam_gen)
-        except StopIteration:
-            self.say('Camera stream ended')
-            self.stop()
+            self._open_vmc()
+            self._tracker = NativeTracker(max_step=0.1, max_step_deg=5.0, calibrate_frames=90)
+
+            # Calibration: first ~3 seconds at 30 fps = ~90 frames.
+            # During calibration the tracker builds its background model;
+            # we set the face box manually once a stable track exists.
+            calibrated = False
+
+            for calib_frames, (_t, rgb) in enumerate(
+                camera_stream_frames(device=0, fps=30.0, size=_CAM_SIZE, gray=False)
+            ):
+                if self._stop.is_set():
+                    break
+
+                # rgb is float32 [0,1] RGB → convert to uint8 BGR for OpenCV/PIL
+                frame_bgr = (np.clip(rgb, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
+                frame_bgr = frame_bgr[..., ::-1]  # RGB → BGR
+
+                gray = (np.clip(rgb, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
+                gray = gray.mean(axis=2).astype(np.uint8)
+
+                # Tracker needs color/gray frame; it converts internally.
+                params = self._tracker(frame_bgr)
+
+                with self._lock:
+                    self._latest_params = params
+                    self._latest_frame = frame_bgr
+                    self._latest_stabilised = (
+                        frame_bgr  # tracker provides stabilised signal via box
+                    )
+
+                if self._vmc is not None:
+                    self._vmc.send_frame(params)
+
+                if not calibrated and calib_frames >= self._tracker.calibrate_frames:
+                    calibrated = True
+                    self.status_var.set('Calibrato — avatar attivo')
+
+                time.sleep(1.0 / 30.0)
+
+        except Exception as exc:  # pragma: no cover - runtime errors shown in UI
+            self.status_var.set(f'Errore: {exc}')
+        finally:
+            self._running = False
+            self.root.after(0, self._stop_app)
+
+    # -- UI refresh -------------------------------------------------------
+
+    def _refresh_ui(self) -> None:
+        if not self._running:
             return
-        except Exception as e:
-            self.say(f'Camera error: {e}')
-            self.root.after(50, self.tick)
+        with self._lock:
+            params = dict(self._latest_params)
+            frame = self._latest_frame.copy() if self._latest_frame is not None else None
+
+        if frame is not None:
+            self._show_video(frame)
+            self._show_avatar(params)
+            self._update_bars(params)
+
+        self.root.after(33, self._refresh_ui)
+
+    def _show_video(self, frame_bgr: np.ndarray) -> None:
+        if not _TK_AVAILABLE:
             return
+        # Resize to fit the label area while keeping aspect
+        h, w = frame_bgr.shape[:2]
+        max_w, max_h = 320, 240
+        scale = min(max_w / w, max_h / h)
+        new_w, new_h = int(w * scale), int(h * scale)
+        small = cv2_resize(frame_bgr, (new_w, new_h))
+        rgb = small[..., ::-1]  # BGR → RGB
+        img = Image.fromarray(rgb)
+        photo = ImageTk.PhotoImage(image=img)
+        self.video_label.configure(image=photo, text='')
+        self.video_label.image = photo  # type: ignore[attr-defined]  # keep reference
 
-        # camera_stream_frames yields RGB float32 in [0, 1]; convert to BGR uint8 for display
-        bgr = cv2.cvtColor((rgb * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
+    def _show_avatar(self, params: dict[str, float]) -> None:
+        avatar = draw_avatar(params, size=_AVATAR_SIZE)
+        rgb = cv2_cvtColor_rgb(avatar)
+        img = Image.fromarray(rgb)
+        photo = ImageTk.PhotoImage(image=img)
+        self.avatar_label.configure(image=photo, text='')
+        self.avatar_label.image = photo  # type: ignore[attr-defined]
 
-        frame = self.det.detect(np.ascontiguousarray(rgb), t)
-        params = self.ap.step(frame)
-        face = bool(frame['confidence'].any())
-        self.frames += 1
-        self.face_frames += int(face)
-        view = bgr.copy()
-        pts = frame['points']
-        for x, y in pts[np.all(np.isfinite(pts), axis=1)].astype(int):
-            cv2.circle(view, (int(x), int(y)), 2, (0, 255, 0), -1)
-        self.photo = tk.PhotoImage(data=cv2.imencode('.ppm', cv2.flip(view, 1))[1].tobytes())
-        self.video.configure(image=self.photo, width=0, height=0)
-        self.say('Volto trovato: sto inviando' if face else 'Nessun volto')
-        self.values.configure(text='\n'.join(f'{k:11s}{params[k]:7.2f}' for k in SHOWN))
-        self.root.after(1, self.tick)
+    def _update_bars(self, params: dict[str, float]) -> None:
+        for name in (
+            'head_yaw',
+            'head_pitch',
+            'head_roll',
+            'mouth_open',
+            'eye_l',
+            'eye_r',
+            'blink',
+        ):
+            val = float(params.get(name, 0.0))
+            self._param_vars[name].set(val)
+            self._param_labels[name].configure(text=f'{val:.2f}')
 
-    def stop(self) -> None:
-        self.running = False
-        # camera_stream_frames handles camera release internally
-        if self.ap is not None and self.ap.vmc is not None:
-            self.ap.vmc.close()
-        self.ap = None
-        self.video.configure(image='', width=80, height=30)
-        self.photo = None
-        self.start_button.configure(state='normal')
-        self.stop_button.configure(state='disabled')
-        self.say('Fermo')
+    # -- VMC --------------------------------------------------------------
 
-    def close(self) -> None:
-        self.stop()
-        self.root.destroy()
+    def _open_vmc(self) -> None:
+        try:
+            self._vmc = VmcSender(host='127.0.0.1', port=self.vmc_port)
+        except ImportError:
+            self._vmc = None
+            self.status_var.set('python-osc non installato: VMC disattivato')
+
+    def _close_vmc(self) -> None:
+        if self._vmc is not None:
+            with contextlib.suppress(Exception):
+                self._vmc.close()
+            self._vmc = None
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--selftest', type=float, default=0.0, help='start, run N seconds, quit')
+def cv2_resize(img: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    """Resize without importing cv2 at module level (optional)."""
+    try:
+        import cv2  # noqa: PLC0415
+
+        return cv2.resize(img, size, interpolation=cv2.INTER_AREA)  # type: ignore[no-any-return]
+    except ImportError:
+        from PIL import Image  # noqa: PLC0415
+
+        pil = Image.fromarray(img)
+        pil = pil.resize(size, Image.Resampling.BILINEAR)
+        return np.array(pil)  # type: ignore[no-any-return]
+
+
+def cv2_cvtColor_rgb(bgr: np.ndarray) -> np.ndarray:
+    """BGR → RGB without importing cv2 at module level."""
+    return bgr[..., ::-1].copy()  # type: ignore[no-any-return]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description='D-Avatar live app')
+    parser.add_argument(
+        '--detector',
+        choices=['mediapipe'],
+        default=None,
+        help='detector to use (mediapipe path is OFF by default)',
+    )
+    parser.add_argument('--vmc-port', type=int, default=39539, help='VMC/UDP port (default 39539)')
     args = parser.parse_args()
+
+    if not _TK_AVAILABLE:
+        print('tkinter/Pillow not available: cannot run the app')
+        sys.exit(1)
+
     root = tk.Tk()
-    app = App(root)
-    if args.selftest > 0:
-        root.after(500, app.start)
-
-        def finish() -> None:
-            print(f'selftest: frames={app.frames} face_frames={app.face_frames}')
-            print(f'status: {app.status.cget("text")}')
-            app.close()
-
-        root.after(int(args.selftest * 1000), finish)
+    DAvatarApp(root, vmc_port=args.vmc_port, use_mediapipe=(args.detector == 'mediapipe'))
     root.mainloop()
-    return 0
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    main()
