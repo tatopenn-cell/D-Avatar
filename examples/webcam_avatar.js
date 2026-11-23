@@ -164,9 +164,9 @@ function resizeCanvases() {
 async function startWebcam() {
   try {
     state.stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
-    state.video.srcObject = state.stream;
-    await new Promise(resolve => { state.video.onloadedmetadata = resolve; });
-    state.video.play();
+    els.video.srcObject = state.stream;
+    await new Promise(resolve => { els.video.onloadedmetadata = resolve; });
+    els.video.play();
     state.cameraOn = true;
     state.cameraAvailable = true;
     $('webcam-toggle').checked = true;
@@ -750,11 +750,11 @@ function tick(now) {
   const ctx = els.ctx;
   ctx.clearRect(0, 0, w, h);
 
-  if (state.cameraAvailable && state.video && state.video.readyState >= 2) {
-    ctx.drawImage(state.video, 0, 0, w, h);
-    els.pipCtx.drawImage(state.video, 0, 0, els.pip.width, els.pip.height);
-    if (state.hands && state.video.readyState >= 2) {
-      state.hands.send({ image: state.video });
+  if (state.cameraAvailable && els.video && els.video.readyState >= 2) {
+    ctx.drawImage(els.video, 0, 0, w, h);
+    els.pipCtx.drawImage(els.video, 0, 0, els.pip.width, els.pip.height);
+    if (state.hands && els.video.readyState >= 2) {
+      state.hands.send({ image: els.video });
     }
   } else {
     ctx.fillStyle = '#0a0a12';
